@@ -90,6 +90,22 @@ class TestBuildToolPreview:
         assert result is not None
         assert "hello world" in result
 
+    def test_search_files_preview_humanizes_regex_alternation(self):
+        result = build_tool_preview(
+            "search_files",
+            {
+                "pattern": (
+                    r"tool_progress_code_blocks|tool_progress_show_previews|"
+                    r"label\.only|code block"
+                )
+            },
+            max_len=120,
+        )
+        assert result == (
+            "tool_progress_code_blocks · tool_progress_show_previews · "
+            "label.only · code block"
+        )
+
     def test_read_file_preview(self):
         result = build_tool_preview("read_file", {"path": "/tmp/test.py", "offset": 1})
         assert result is not None

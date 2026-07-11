@@ -148,6 +148,31 @@ describe('buildToolView file edit diffs', () => {
 })
 
 describe('buildToolView title actions', () => {
+  it('shows the concrete skill name for skill_view rows', () => {
+    const pending = buildToolView(
+      part({ args: { name: 'hermes-agent' }, result: undefined, toolName: 'skill_view' }),
+      ''
+    )
+
+    const complete = buildToolView(
+      part({ args: { name: 'hermes-agent' }, result: { success: true }, toolName: 'skill_view' }),
+      ''
+    )
+
+    expect(pending.title).toBe('Reading hermes-agent')
+    expect(complete.title).toBe('Read hermes-agent')
+  })
+
+  it('does not expose paths from malformed skill names', () => {
+    const view = buildToolView(
+      part({ args: { name: '../../secrets/private.md' }, result: undefined, toolName: 'skill_view' }),
+      ''
+    )
+
+    expect(view.title).toBe('Running skill view')
+    expect(view.title).not.toContain('private.md')
+  })
+
   it('marks the pending action separately from the rest of the title', () => {
     const read = buildToolView(part({ args: { path: '/tmp/demo.txt' }, result: undefined, toolName: 'read_file' }), '')
 
@@ -174,6 +199,29 @@ describe('buildToolView title actions', () => {
     expect(terminal.titleAction).toEqual({ prefix: '', text: 'Running', suffix: ' npm test -- --runInBand' })
     expect(code.title).toBe('Scripting print("hello")')
     expect(code.titleAction).toEqual({ prefix: '', text: 'Scripting', suffix: ' print("hello")' })
+  })
+
+  it('does not duplicate action verbs inherited from backend context', () => {
+    const read = buildToolView(
+      part({
+        args: { context: 'Reading banner.py L170-299', path: './banner.py' },
+        result: undefined,
+        toolName: 'read_file'
+      }),
+      ''
+    )
+
+    const terminal = buildToolView(
+      part({
+        args: { context: 'Running npm test', command: 'npm test' },
+        result: { exit_code: 0, output: 'ok' },
+        toolName: 'terminal'
+      }),
+      ''
+    )
+
+    expect(read.title).toBe('Reading banner.py L170-299')
+    expect(terminal.title).toBe('Ran npm test')
   })
 
   it('does not mark completed tool titles as pending actions', () => {

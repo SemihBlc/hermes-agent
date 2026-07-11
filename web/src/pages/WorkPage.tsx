@@ -44,6 +44,7 @@ import {
   startWorkBusyQueue,
   workMessageContextPrompt,
   workReconnectDelay,
+  workStoredSessionId,
   type WorkClarifyRequest,
   type WorkMessageContext,
 } from "@/lib/work-chat";
@@ -57,6 +58,7 @@ import {
   fallbackUploadFileName,
   filesFromDataTransfer,
   managedUploadRoot,
+  safeUploadFileName,
   workUploadPrompt,
   workUploadTargetPath,
   type WorkUploadAttachment,
@@ -133,6 +135,7 @@ export default function WorkPage() {
   const sessionOperationRef = useRef<Promise<void>>(Promise.resolve());
   const pendingSessionOperationsRef = useRef(0);
   const sessionIdRef = useRef<string | null>(null);
+  const storedSessionIdRef = useRef<string | null>(null);
   const streamRef = useRef("");
   const pendingBusyMessagesRef = useRef<WorkMessage[]>([]);
   const queuedMessagesRef = useRef<WorkMessage[]>([]);
@@ -144,6 +147,7 @@ export default function WorkPage() {
   const transcriptEndRef = useRef<HTMLDivElement | null>(null);
   const autoScrollRef = useRef(true);
   const uploadInputRef = useRef<HTMLInputElement | null>(null);
+  const uploadInFlightRef = useRef(false);
   const uploadSequenceRef = useRef(0);
   const uploadDragDepthRef = useRef(0);
   const uploadNoticeTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -208,8 +212,9 @@ export default function WorkPage() {
 
   const uploadFilesToWork = useCallback(
     async (files: File[]) => {
-      if (!files.length || uploading) return;
+      if (!files.length || uploadInFlightRef.current) return;
 
+      uploadInFlightRef.current = true;
       setUploading(true);
       setError(null);
       showUploadNotice(`Lade ${files.length} Datei${files.length === 1 ? "" : "en"} hoch …`);
@@ -224,7 +229,7 @@ export default function WorkPage() {
           const result = await api.uploadFile(targetPath, file, true);
           const attachment: WorkUploadAttachment = {
             id: `upload-${Date.now()}-${sequence}-${index}`,
-            name: fallbackUploadFileName(file, index),
+            name: safeUploadFileName(fallbackUploadFileName(file, index)),
             path: result.path,
             mimeType: file.type || result.entry.mime_type || "",
             size: file.size,
@@ -245,10 +250,11 @@ export default function WorkPage() {
         setUploadNotice(null);
         pushActivity("error", { message });
       } finally {
+        uploadInFlightRef.current = false;
         setUploading(false);
       }
     },
-    [pushActivity, showUploadNotice, uploading],
+    [pushActivity, showUploadNotice],
   );
 
   const removeAttachment = useCallback((id: string) => {
@@ -329,6 +335,26 @@ export default function WorkPage() {
       const isCurrentSession = (event: { session_id?: string }) =>
         gatewayEventBelongsToSession(event.session_id, sessionIdRef.current);
 
+      const failClosedPrompt = (
+        event: { session_id?: string; payload?: { request_id?: unknown } },
+        method: "sudo.respond" | "secret.respond" | "terminal.read.respond",
+        key: "password" | "value" | "text",
+        value: string,
+      ) => {
+        if (!isCurrentSession(event)) return;
+        const requestId = typeof event.payload?.request_id === "string" ? event.payload.request_id : "";
+        if (!requestId || !event.session_id) return;
+        void client.request(method, {
+          session_id: event.session_id,
+          request_id: requestId,
+          [key]: value,
+        }).catch((cause: unknown) => {
+          const message = cause instanceof Error ? cause.message : `${method} fehlgeschlagen.`;
+          setError(message);
+          pushActivity("error", { message });
+        });
+      };
+
       cleanupRef.current.push(
         client.onState((state) => {
           setConnectionState(state);
@@ -354,6 +380,9 @@ export default function WorkPage() {
           streamRef.current = "";
           setStreamingText("");
           setRunning(true);
+        }),
+        client.on<MessagePayload>("message.commentary", (event) => {
+          if (isCurrentSession(event)) pushActivity("message.commentary", event.payload);
         }),
         client.on<MessagePayload>("message.delta", (event) => {
           if (!isCurrentSession(event)) return;
@@ -425,7 +454,30 @@ export default function WorkPage() {
           if (isCurrentSession(event)) pushActivity("reasoning.available", event.payload);
         }),
         client.on("approval.request", (event) => {
-          if (isCurrentSession(event)) pushActivity("approval.request", event.payload);
+          if (!isCurrentSession(event) || !event.session_id) return;
+          pushActivity("approval.request", event.payload);
+          void client.request("approval.respond", {
+            session_id: event.session_id,
+            choice: "deny",
+          }).catch((cause: unknown) => {
+            const message = cause instanceof Error ? cause.message : "approval.respond fehlgeschlagen.";
+            setError(message);
+            pushActivity("error", { message });
+          });
+        }),
+        client.on<{ request_id?: unknown }>("sudo.request", (event) => {
+          failClosedPrompt(event, "sudo.respond", "password", "");
+        }),
+        client.on<{ request_id?: unknown }>("secret.request", (event) => {
+          failClosedPrompt(event, "secret.respond", "value", "");
+        }),
+        client.on<{ request_id?: unknown }>("terminal.read.request", (event) => {
+          failClosedPrompt(
+            event,
+            "terminal.read.respond",
+            "text",
+            JSON.stringify({ total_lines: 0, start: 0, end: 0, viewport_rows: 0, cursor_row: 0, text: "" }),
+          );
         }),
       );
     },
@@ -468,6 +520,7 @@ export default function WorkPage() {
 
     if (sessionIdRef.current === currentSession) {
       sessionIdRef.current = null;
+      storedSessionIdRef.current = null;
       if (mountedRef.current) setSessionId(null);
     }
   }, []);
@@ -518,6 +571,7 @@ export default function WorkPage() {
         }
 
         sessionIdRef.current = payload.session_id;
+        storedSessionIdRef.current = workStoredSessionId(payload, resumeId);
         setSessionId(payload.session_id);
         setMessages(hydrateMessages(payload.messages));
         setModel([payload.info?.provider, payload.info?.model].filter(Boolean).join(" / "));
@@ -576,14 +630,40 @@ export default function WorkPage() {
 
     const delay = workReconnectDelay(reconnectAttemptRef.current++);
     const timer = window.setTimeout(() => {
-      void client().catch((cause: unknown) => {
+      const reconnect = async () => {
+        const currentClient = await client();
+        const resumeId = storedSessionIdRef.current || sessionIdRef.current;
+        if (!resumeId) throw new Error("Keine Work-Chat-Session zum Wiederverbinden.");
+
+        const serialized = serializeWorkSessionOperation(sessionOperationRef.current, async () => {
+          const payload = await currentClient.request<SessionPayload>("session.resume", {
+            profile: profile || undefined,
+            session_id: resumeId,
+            source: "web",
+          });
+          if (!mountedRef.current) return;
+          sessionIdRef.current = payload.session_id;
+          storedSessionIdRef.current = workStoredSessionId(payload, resumeId);
+          setSessionId(payload.session_id);
+          setMessages(hydrateMessages(payload.messages));
+          setModel([payload.info?.provider, payload.info?.model].filter(Boolean).join(" / "));
+          setRunning(Boolean(payload.running));
+          streamRef.current = "";
+          setStreamingText("");
+          setError(null);
+        });
+        sessionOperationRef.current = serialized.queue;
+        await serialized.operation;
+      };
+
+      void reconnect().catch((cause: unknown) => {
         if (!mountedRef.current) return;
         const message = cause instanceof Error ? cause.message : "Work-Chat-Verbindung fehlgeschlagen.";
         setError(message);
       });
     }, delay);
     return () => window.clearTimeout(timer);
-  }, [client, connectionState, sessionId]);
+  }, [client, connectionState, profile, sessionId]);
 
   const submit = useCallback(
     async (event?: FormEvent) => {
@@ -807,7 +887,7 @@ export default function WorkPage() {
         >
           <div className="mx-auto flex min-h-full w-full max-w-5xl flex-col gap-6">
             {error ? (
-              <div className="flex items-start gap-2 rounded-xl border border-destructive/30 bg-destructive/5 px-3 py-2 text-sm text-destructive">
+              <div role="alert" className="flex items-start gap-2 rounded-xl border border-destructive/30 bg-destructive/5 px-3 py-2 text-sm text-destructive">
                 <AlertCircle className="mt-0.5 h-4 w-4 shrink-0" />
                 <span>{error}</span>
               </div>
@@ -860,6 +940,15 @@ export default function WorkPage() {
                         <p className="whitespace-pre-wrap">{message.text}</p>
                       )}
                     </div>
+                    <button
+                      type="button"
+                      onClick={() => attachMessageAsContext(message)}
+                      aria-label="Nachricht als Kontext anhängen"
+                      title="Als Kontext anhängen"
+                      className="ml-2 mt-2 h-7 w-7 shrink-0 rounded-full p-1.5 text-text-tertiary hover:bg-midground/10 hover:text-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/60"
+                    >
+                      <Quote className="h-4 w-4" />
+                    </button>
                   </article>
                 ))}
 
@@ -928,7 +1017,7 @@ export default function WorkPage() {
         <form onSubmit={submit} className="shrink-0 px-3 pb-3 pt-2 sm:px-6 sm:pb-4">
           <div className="mx-auto w-full max-w-5xl">
             {uploadNotice ? (
-              <div className="mb-2 flex items-center gap-2 rounded-xl bg-sky-500/10 px-3 py-2 text-xs text-sky-300">
+              <div role="status" aria-live="polite" className="mb-2 flex items-center gap-2 rounded-xl bg-sky-500/10 px-3 py-2 text-xs text-sky-300">
                 {uploading ? <Loader2 className="h-3.5 w-3.5 shrink-0 animate-spin" /> : <Paperclip className="h-3.5 w-3.5 shrink-0" />}
                 <span>{uploadNotice}</span>
               </div>
@@ -1017,6 +1106,7 @@ export default function WorkPage() {
                   }}
                   disabled={connectionState !== "open" || openingSession || !sessionId}
                   rows={1}
+                  aria-label="Nachricht an Hermes"
                   placeholder={
                     messageContext
                       ? "Frage oder Anweisung zum markierten Kontext…"

@@ -660,6 +660,7 @@ def _consume_codex_event_stream(
     has_tool_calls = False
     first_delta_fired = False
     active_message_phase: str | None = None
+    unphased_message_started_after_commentary = False
     saw_commentary = False
     streamed_final_text = False
     terminal_status: str = "completed"
@@ -723,9 +724,13 @@ def _consume_codex_event_stream(
             item = _event_field(event, "item")
             item_type = _item_field(item, "type", "")
             pending_unphased_text_deltas.clear()
+            unphased_message_started_after_commentary = False
             if item_type == "message":
                 phase = _item_field(item, "phase", None)
                 active_message_phase = phase.strip().lower() if isinstance(phase, str) else None
+                unphased_message_started_after_commentary = (
+                    active_message_phase is None and saw_commentary
+                )
                 if active_message_phase in {"commentary", "analysis"}:
                     saw_commentary = True
             else:
@@ -778,6 +783,7 @@ def _consume_codex_event_stream(
                         _record_final_text_delta(pending_delta)
             pending_unphased_text_deltas.clear()
             active_message_phase = None
+            unphased_message_started_after_commentary = False
             continue
 
         if event_type in _TERMINAL_EVENT_TYPES:
@@ -804,6 +810,32 @@ def _consume_codex_event_stream(
                     terminal_error = getattr(resp_obj, "error", None)
                     if terminal_error is None and isinstance(resp_obj, dict):
                         terminal_error = resp_obj.get("error")
+            if event_type == "response.completed" and pending_unphased_text_deltas:
+                terminal_output = getattr(resp_obj, "output", None)
+                if terminal_output is None and isinstance(resp_obj, dict):
+                    terminal_output = resp_obj.get("output")
+                terminal_phases = []
+                if isinstance(terminal_output, list):
+                    for output_item in terminal_output:
+                        if _item_field(output_item, "type", "") != "message":
+                            continue
+                        phase = _item_field(output_item, "phase", None)
+                        terminal_phases.append(phase.strip().lower() if isinstance(phase, str) else None)
+                terminal_has_commentary = any(phase in {"commentary", "analysis"} for phase in terminal_phases)
+                terminal_has_final = any(
+                    phase is not None and phase not in {"commentary", "analysis"}
+                    for phase in terminal_phases
+                )
+                if terminal_has_commentary:
+                    saw_commentary = True
+                if (
+                    terminal_has_final
+                    or unphased_message_started_after_commentary
+                    or (not saw_commentary and not terminal_has_commentary)
+                ):
+                    for pending_delta in pending_unphased_text_deltas:
+                        _record_final_text_delta(pending_delta)
+                pending_unphased_text_deltas.clear()
             if event_type == "response.completed":
                 terminal_status = terminal_status or "completed"
             elif event_type == "response.incomplete":

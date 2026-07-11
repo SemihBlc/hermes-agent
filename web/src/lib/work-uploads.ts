@@ -63,7 +63,7 @@ export function workUploadPrompt(attachments: WorkUploadAttachment[], userText: 
   const files = attachments
     .map((attachment, index) => {
       const mime = attachment.mimeType || "unknown MIME";
-      return `${index + 1}) ${attachment.name} (${mime}, ${formatUploadSize(attachment.size)}) unter ${attachment.path}`;
+      return `${index + 1}) ${safeUploadFileName(attachment.name)} (${mime}, ${formatUploadSize(attachment.size)}) unter ${attachment.path}`;
     })
     .join("\n");
   const hint = "Hinweis: Bei Screenshots/Bildern vision_analyze nutzen; bei PDFs/Dokumenten read_file/OCR verwenden.";

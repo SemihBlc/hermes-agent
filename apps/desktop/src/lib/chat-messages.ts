@@ -698,6 +698,37 @@ function withUniqueToolCallIds(messages: ChatMessage[]): ChatMessage[] {
   })
 }
 
+function withAssistantIterationSeparator(
+  previousParts: ChatMessagePart[],
+  parts: ChatMessagePart[]
+): ChatMessagePart[] {
+  const textIndex = parts.findIndex(part => part.type === 'text' && part.text.trim())
+
+  if (textIndex < 0) {
+    return parts
+  }
+
+  const previousText = [...previousParts]
+    .reverse()
+    .find(part => part.type === 'text' && part.text.length) as
+    | Extract<ChatMessagePart, { type: 'text' }>
+    | undefined
+
+  const text = (parts[textIndex] as Extract<ChatMessagePart, { type: 'text' }>).text
+  const trailingNewlines = previousText?.text.match(/\n*$/)?.[0].length ?? 0
+  const leadingNewlines = text.match(/^\n*/)?.[0].length ?? 0
+  const missingNewlines = Math.max(0, 2 - trailingNewlines - leadingNewlines)
+
+  if (missingNewlines === 0) {
+    return parts
+  }
+
+  const next = [...parts]
+  next[textIndex] = { ...next[textIndex], text: `${'\n'.repeat(missingNewlines)}${text}` } as ChatMessagePart
+
+  return next
+}
+
 export function toChatMessages(messages: SessionMessage[]): ChatMessage[] {
   const result: ChatMessage[] = []
   let pendingToolParts: ChatMessagePart[] = []
@@ -824,7 +855,10 @@ export function toChatMessages(messages: SessionMessage[]): ChatMessage[] {
       const activeHasToolCall = Boolean(activeAssistant?.parts.some(part => part.type === 'tool-call'))
 
       if (activeAssistant && (currentHasToolCall || activeHasToolCall)) {
-        activeAssistant.parts = [...activeAssistant.parts, ...parts]
+        activeAssistant.parts = [
+          ...activeAssistant.parts,
+          ...withAssistantIterationSeparator(activeAssistant.parts, parts)
+        ]
         activeAssistant.timestamp = message.timestamp ?? activeAssistant.timestamp
 
         return

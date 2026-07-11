@@ -770,6 +770,62 @@ def test_consume_codex_stream_waits_for_done_item_when_phase_is_missing(monkeypa
     assert response.output_text == ""
 
 
+def test_consume_codex_stream_keeps_unphased_final_deltas_without_done_item(monkeypatch):
+    from agent.codex_runtime import _consume_codex_event_stream
+
+    streamed = []
+    response = _consume_codex_event_stream(
+        _FakeCreateStream([
+            SimpleNamespace(
+                type="response.output_item.added",
+                item=SimpleNamespace(type="message"),
+            ),
+            SimpleNamespace(type="response.output_text.delta", delta="Valid final answer."),
+            SimpleNamespace(type="response.completed", response=SimpleNamespace(status="completed")),
+        ]),
+        model="gpt-5-codex",
+        on_text_delta=streamed.append,
+    )
+
+    assert streamed == ["Valid final answer."]
+    assert response.output_text == "Valid final answer."
+    assert response.output[0].content[0].text == "Valid final answer."
+
+
+def test_consume_codex_stream_keeps_unphased_final_after_commentary_without_done_item(
+    monkeypatch,
+):
+    from agent.codex_runtime import _consume_codex_event_stream
+
+    commentary_item = SimpleNamespace(
+        type="message",
+        role="assistant",
+        phase="commentary",
+        status="completed",
+        content=[SimpleNamespace(type="output_text", text="Checking first.")],
+    )
+    response = _consume_codex_event_stream(
+        _FakeCreateStream([
+            SimpleNamespace(
+                type="response.output_item.added",
+                item=SimpleNamespace(type="message", phase="commentary"),
+            ),
+            SimpleNamespace(type="response.output_text.delta", delta="Checking first."),
+            SimpleNamespace(type="response.output_item.done", item=commentary_item),
+            SimpleNamespace(
+                type="response.output_item.added",
+                item=SimpleNamespace(type="message"),
+            ),
+            SimpleNamespace(type="response.output_text.delta", delta="Valid final answer."),
+            SimpleNamespace(type="response.completed", response=SimpleNamespace(status="completed")),
+        ]),
+        model="gpt-5-codex",
+    )
+
+    assert response.output_text == "Valid final answer."
+    assert response.deferred_text_stream is True
+
+
 def test_run_codex_stream_surfaces_failed_status_in_final_response(monkeypatch):
     """A ``response.failed`` terminal event is reflected on the returned object."""
     agent = _build_agent(monkeypatch)
@@ -2177,14 +2233,21 @@ def test_build_assistant_message_redacts_codex_message_items_before_replay(monke
             "content": [{"type": "output_text", "text": f"Using {secret}"}],
         }
     ]
+    raw_reasoning_items = [
+        {
+            "type": "reasoning",
+            "encrypted_content": "opaque-provider-payload",
+            "summary": [{"type": "summary_text", "text": f"Reasoned with {secret}"}],
+        }
+    ]
     assistant = SimpleNamespace(
         content="",
         commentary=f"Using {secret}",
-        reasoning=None,
-        reasoning_content=None,
+        reasoning=f"Reasoned with {secret}",
+        reasoning_content=f"Reasoned with {secret}",
         reasoning_details=None,
         tool_calls=[],
-        codex_reasoning_items=None,
+        codex_reasoning_items=raw_reasoning_items,
         codex_message_items=raw_items,
     )
 
@@ -2195,6 +2258,8 @@ def test_build_assistant_message_redacts_codex_message_items_before_replay(monke
     assert secret not in json.dumps(stored)
     assert secret not in json.dumps(replay)
     assert secret in raw_items[0]["content"][0]["text"]
+    assert secret in raw_reasoning_items[0]["summary"][0]["text"]
+    assert stored["codex_reasoning_items"][0]["encrypted_content"] == "opaque-provider-payload"
 
 
 def test_stream_delta_scrubber_resets_between_turns(monkeypatch):

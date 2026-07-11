@@ -57,6 +57,13 @@ export function gatewayEventBelongsToSession(
   return Boolean(eventSessionId && activeSessionId && eventSessionId === activeSessionId);
 }
 
+export function workStoredSessionId(
+  payload: { stored_session_id?: string; resumed?: string; session_id: string },
+  requestedResumeId?: string,
+): string {
+  return payload.stored_session_id || payload.resumed || requestedResumeId || payload.session_id;
+}
+
 export function shouldReconnectWorkSession(
   connectionState: string,
   activeSessionId: string | null,

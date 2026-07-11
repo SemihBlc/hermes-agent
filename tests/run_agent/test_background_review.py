@@ -255,7 +255,7 @@ def test_background_review_summary_is_attributed_to_self_improvement_loop(monkey
 
     Users who miss the line in their terminal have no way to tell that the
     background review was what modified their skill/memory stores. The
-    summary prefix ``💾 Self-improvement review: …`` makes the origin
+    summary prefix ``Self-improvement review: …`` makes the origin
     explicit so both the CLI and gateway deliveries are unambiguous.
     """
     import json
@@ -308,9 +308,10 @@ def test_background_review_summary_is_attributed_to_self_improvement_loop(monkey
 
     # Gateway path gets the same prefix.
     assert len(captured_bg_callback) == 1
-    assert captured_bg_callback[0].startswith("💾 Self-improvement review:"), (
+    assert captured_bg_callback[0].startswith("Self-improvement review:"), (
         captured_bg_callback[0]
     )
+    assert "💾" not in captured_bg_callback[0]
 
 
 def test_background_review_fork_skips_external_memory_plugins(monkeypatch):

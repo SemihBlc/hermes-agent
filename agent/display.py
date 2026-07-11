@@ -179,6 +179,12 @@ def _oneline(text: str) -> str:
     return " ".join(text.split())
 
 
+def _humanize_search_pattern(pattern: str) -> str:
+    """Make common regex search previews readable without changing the query."""
+    pattern = re.sub(r"(?<!\\)\|", " · ", pattern)
+    return re.sub(r"\\([.{}()\[\]])", r"\1", pattern)
+
+
 def _truncate_preview(text: str, max_len: int | None) -> str:
     if max_len and max_len > 0 and len(text) > max_len:
         if max_len <= 3:
@@ -497,6 +503,12 @@ def build_tool_preview(tool_name: str, args: dict, max_len: int | None = None) -
         line_label = _read_file_line_label(args)
         preview = f"{label} {line_label}".strip()
         return _truncate_preview(preview, max_len) if preview else None
+
+    if tool_name == "search_files":
+        pattern = _oneline(str(args.get("pattern") or ""))
+        if not pattern:
+            return None
+        return _truncate_preview(_humanize_search_pattern(pattern), max_len)
 
     if tool_name == "session_search":
         query = _oneline(args.get("query", ""))

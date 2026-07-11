@@ -29,9 +29,6 @@ import {
   withSessionBusyRetry
 } from './utils'
 
-export const IMAGE_ONLY_CONTEXT_PROMPT =
-  'Analyze this image in the context of our current conversation. Identify what is likely relevant, answer any implicit question or concern visible in it, and suggest one concrete next step. Avoid a generic inventory of visible objects. If the intended task is genuinely unclear, ask one specific clarifying question.'
-
 interface SubmitPromptDeps {
   activeSessionId: string | null
   activeSessionIdRef: MutableRefObject<string | null>
@@ -83,7 +80,6 @@ export function useSubmitPrompt(deps: SubmitPromptDeps) {
       )
 
       const terminalContextBlocks = terminalContextBlocksFromDraft(rawText).join('\n\n')
-      const hasImage = attachments.some(a => a.kind === 'image')
 
       // Refs are recomputed after sync (file.attach rewrites @file: refs to
       // workspace-relative paths the remote gateway can resolve). Seed the
@@ -102,17 +98,14 @@ export function useSubmitPrompt(deps: SubmitPromptDeps) {
           .filter(Boolean)
           .join('\n')
 
-        return (
-          [contextRefs, terminalContextBlocks, visibleText].filter(Boolean).join('\n\n') ||
-          (present.some(a => a.kind === 'image') ? IMAGE_ONLY_CONTEXT_PROMPT : '')
-        )
+        return [contextRefs, terminalContextBlocks, visibleText].filter(Boolean).join('\n\n')
       }
 
       // Queue drains fire on the busy→false settle edge, where busyRef (synced
       // from $busy by a separate effect) may still read true — honoring it would
       // bounce the drained send. The drain lock serializes them; the user path
       // keeps the guard so a stray Enter mid-turn can't double-submit.
-      const hasSendable = Boolean(visibleText || terminalContextBlocks || attachments.length || hasImage)
+      const hasSendable = Boolean(visibleText || terminalContextBlocks || attachments.length)
 
       if (!hasSendable || (!options?.fromQueue && busyRef.current)) {
         return false

@@ -583,6 +583,20 @@ function firstStringField(record: Record<string, unknown>, keys: readonly string
   return ''
 }
 
+function stripLeadingAction(value: string, actions: readonly string[]): string {
+  const lower = value.toLocaleLowerCase()
+
+  for (const action of actions) {
+    const prefix = `${action.toLocaleLowerCase()} `
+
+    if (lower.startsWith(prefix)) {
+      return value.slice(prefix.length).trimStart()
+    }
+  }
+
+  return value
+}
+
 function collectResultItems(value: unknown): unknown[] {
   if (Array.isArray(value)) {
     return value
@@ -1257,6 +1271,18 @@ function dynamicTitle(
   const titledAction = (action: string, title: string): ToolTitleParts =>
     titlePartsFromAction(title, part.result === undefined ? action : undefined)
 
+  if (part.toolName === 'skill_view') {
+    const skillName = firstStringField(args, ['name'])
+
+    if (!/^[a-z0-9][a-z0-9:._-]{0,127}$/i.test(skillName)) {
+      return fallback
+    }
+
+    const action = verb(translateNow('assistant.tool.actions.reading'), translateNow('assistant.tool.actions.read'))
+
+    return titledAction(action, translateNow('assistant.tool.titleTemplates.actionTarget', action, skillName))
+  }
+
   if (part.toolName === 'web_extract') {
     const url = findFirstUrl(args, result)
     const action = verb(translateNow('assistant.tool.actions.reading'), translateNow('assistant.tool.actions.read'))
@@ -1307,7 +1333,7 @@ function dynamicTitle(
   }
 
   if (part.toolName === 'read_file') {
-    const target = readFileDisplayTarget(args, result)
+    const target = stripLeadingAction(readFileDisplayTarget(args, result), ['Read', 'Reading'])
     const action = verb(translateNow('assistant.tool.actions.reading'), translateNow('assistant.tool.actions.read'))
 
     return target
@@ -1316,10 +1342,15 @@ function dynamicTitle(
   }
 
   if (part.toolName === 'terminal' || part.toolName === 'execute_code') {
-    const command =
+    const rawCommand =
       firstStringField(args, ['context', 'preview']) ||
       firstStringField(args, ['command', 'code']) ||
       contextValue(args)
+
+    const command = stripLeadingAction(
+      rawCommand,
+      part.toolName === 'execute_code' ? ['Scripting', 'Ran code', 'Running code'] : ['Ran', 'Running']
+    )
 
     if (command) {
       const action =

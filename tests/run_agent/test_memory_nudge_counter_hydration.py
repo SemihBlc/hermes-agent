@@ -8,7 +8,7 @@ A freshly built AIAgent has _turns_since_memory=0 and _user_turn_count=0.
 Without hydration from conversation_history, the memory.nudge_interval
 trigger (`_turns_since_memory >= _memory_nudge_interval`) can never be
 reached: every turn looks like turn 1 to the counter, so a user can chat
-for hours without ever seeing a "💾 Self-improvement review:" message.
+for hours without ever seeing a "Self-improvement review:" message.
 
 This test pins the hydration behavior added at the top of run_conversation().
 """

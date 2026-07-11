@@ -1,9 +1,18 @@
-function resolveOfficialBehindCount({ currentSha, targetSha, trackedSha, targetIsAncestor }) {
+function resolveOfficialBehindCount({
+  currentSha,
+  targetSha,
+  targetIsAncestor
+}: {
+  currentSha: string
+  targetSha: string
+  trackedSha?: string
+  targetIsAncestor: boolean
+}) {
   if (currentSha && targetSha && currentSha === targetSha) {
     return 0
   }
 
-  if (trackedSha && trackedSha === targetSha && targetIsAncestor) {
+  if (targetIsAncestor) {
     return 0
   }
 

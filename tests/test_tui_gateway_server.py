@@ -998,6 +998,27 @@ def test_history_to_messages_renders_multimodal_content():
     ]
 
 
+def test_enrich_image_only_prompt_is_contextual_without_generic_fallback(
+    monkeypatch, tmp_path
+):
+    image = tmp_path / "screenshot.png"
+    image.write_bytes(b"not-a-real-png")
+
+    async def fake_vision_analyze_tool(*, image_url, user_prompt):
+        assert image_url == str(image)
+        assert "Describe everything visible" in user_prompt
+        return json.dumps({"success": True, "analysis": "A GitHub device activation page."})
+
+    monkeypatch.setattr(
+        "tools.vision_tools.vision_analyze_tool", fake_vision_analyze_tool
+    )
+
+    enriched = server._enrich_with_attached_images("", [str(image)])
+
+    assert "Analyze this image in the context of our current conversation" in enriched
+    assert "What do you see in this image?" not in enriched
+
+
 def test_session_resume_uses_parent_lineage_for_display(monkeypatch):
     captured = {}
 
@@ -1403,14 +1424,14 @@ def test_status_callback_accepts_single_message_argument():
     )
 
 
-def test_interim_assistant_callback_emits_message_delta_unless_already_streamed():
+def test_interim_assistant_callback_emits_commentary_unless_already_streamed():
     with patch("tui_gateway.server._emit") as emit:
         cb = server._agent_cbs("sid")["interim_assistant_callback"]
         cb("Ich prüfe das jetzt.", already_streamed=False)
         cb("Schon gestreamt.", already_streamed=True)
 
     emit.assert_called_once_with(
-        "message.delta",
+        "message.commentary",
         "sid",
         {"text": "Ich prüfe das jetzt."},
     )
@@ -4213,6 +4234,74 @@ def test_prompt_submit_expands_context_refs(monkeypatch):
     )
 
     assert captured["prompt"] == "expanded prompt"
+
+
+def test_image_only_prompt_submit_keeps_model_context_out_of_persisted_user_text(
+    monkeypatch, tmp_path
+):
+    captured = {}
+    image = tmp_path / "screenshot.png"
+    image.write_bytes(b"not-a-real-png")
+
+    class _Agent:
+        api_mode = "codex_app_server"
+
+        def run_conversation(
+            self,
+            prompt,
+            conversation_history=None,
+            stream_callback=None,
+            persist_user_message=None,
+        ):
+            captured["prompt"] = prompt
+            captured["persist_user_message"] = persist_user_message
+            return {
+                "final_response": "ok",
+                "messages": [
+                    {"role": "user", "content": prompt},
+                    {"role": "assistant", "content": "ok"},
+                ],
+            }
+
+    class _ImmediateThread:
+        def __init__(self, target=None, daemon=None):
+            self._target = target
+
+        def start(self):
+            self._target()
+
+    session = _session(agent=_Agent())
+    session["attached_images"] = [str(image)]
+    server._sessions["sid"] = session
+    monkeypatch.setattr(server.threading, "Thread", _ImmediateThread)
+    monkeypatch.setattr(server, "_emit", lambda *args, **kwargs: None)
+    monkeypatch.setattr(server, "make_stream_renderer", lambda cols: None)
+    monkeypatch.setattr(server, "render_message", lambda raw, cols: None)
+    monkeypatch.setattr(
+        server,
+        "_enrich_with_attached_images",
+        lambda text, paths: "PRIVATE MODEL-ONLY IMAGE CONTEXT",
+    )
+
+    try:
+        resp = server.handle_request(
+            {
+                "id": "1",
+                "method": "prompt.submit",
+                "params": {"session_id": "sid", "text": ""},
+            }
+        )
+    finally:
+        server._sessions.pop("sid", None)
+
+    assert resp["result"]["status"] == "streaming"
+    assert captured["prompt"] == "PRIVATE MODEL-ONLY IMAGE CONTEXT"
+    assert captured["persist_user_message"] == "[Image attachment]"
+    resumed = server._history_to_messages(
+        [{"role": "user", "content": captured["persist_user_message"]}]
+    )
+    assert resumed == [{"role": "user", "text": "[Image attachment]"}]
+    assert "PRIVATE MODEL-ONLY" not in json.dumps(resumed)
 
 
 def test_image_attach_appends_local_image(monkeypatch):

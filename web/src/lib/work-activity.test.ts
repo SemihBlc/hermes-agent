@@ -130,6 +130,17 @@ describe("activityFromGatewayEvent", () => {
     expect(usedSkillNames(rows)).toEqual(["hermes-agent", "test-driven-development"]);
   });
 
+  it("maps commentary to a separate activity row", () => {
+    expect(
+      activityFromGatewayEvent("message.commentary", { text: "Ich prüfe das Repository." }, 4),
+    ).toMatchObject({
+      kind: "status",
+      title: "Ich prüfe das Repository.",
+      status: "info",
+      timestamp: 4,
+    });
+  });
+
   it("maps status, reasoning, and errors to labels only", () => {
     const status = activityFromGatewayEvent(
       "status.update",

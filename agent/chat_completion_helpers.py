@@ -1064,6 +1064,33 @@ def _redact_codex_message_items(codex_message_items):
     return redacted_items
 
 
+def _redact_codex_reasoning_items(codex_reasoning_items):
+    """Copy Codex reasoning items, redacting summary text but not opaque fields."""
+    from agent.redact import redact_sensitive_text
+
+    redacted_items = []
+    for raw_item in codex_reasoning_items:
+        if not isinstance(raw_item, dict):
+            redacted_items.append(raw_item)
+            continue
+        item = dict(raw_item)
+        raw_summary = raw_item.get("summary")
+        if isinstance(raw_summary, list):
+            summary = []
+            for raw_part in raw_summary:
+                if not isinstance(raw_part, dict):
+                    summary.append(raw_part)
+                    continue
+                part = dict(raw_part)
+                text = part.get("text")
+                if isinstance(text, str):
+                    part["text"] = redact_sensitive_text(_sanitize_surrogates(text))
+                summary.append(part)
+            item["summary"] = summary
+        redacted_items.append(item)
+    return redacted_items
+
+
 def build_assistant_message(agent, assistant_message, finish_reason: str) -> dict:
     """Build a normalized assistant message dict from an API response message.
 
@@ -1108,6 +1135,8 @@ def build_assistant_message(agent, assistant_message, finish_reason: str) -> dic
     _san_content = _sanitize_surrogates(_raw_content)
     if reasoning_text:
         reasoning_text = _sanitize_surrogates(reasoning_text)
+        from agent.redact import redact_sensitive_text
+        reasoning_text = redact_sensitive_text(reasoning_text)
 
     # Strip inline reasoning tags (<think>…</think> etc.) from the stored
     # assistant content.  Reasoning was already captured into
@@ -1155,7 +1184,11 @@ def build_assistant_message(agent, assistant_message, finish_reason: str) -> dic
         if isinstance(model_extra, dict) and "reasoning_content" in model_extra:
             raw_reasoning_content = model_extra["reasoning_content"]
     if raw_reasoning_content is not None:
-        msg["reasoning_content"] = _sanitize_surrogates(raw_reasoning_content)
+        sanitized_reasoning_content = _sanitize_surrogates(raw_reasoning_content)
+        if isinstance(sanitized_reasoning_content, str):
+            from agent.redact import redact_sensitive_text
+            sanitized_reasoning_content = redact_sensitive_text(sanitized_reasoning_content)
+        msg["reasoning_content"] = sanitized_reasoning_content
     elif assistant_tool_calls and agent._needs_thinking_reasoning_pad():
         # DeepSeek v4 thinking mode and Kimi / Moonshot thinking mode
         # both require reasoning_content on every assistant tool-call
@@ -1228,7 +1261,7 @@ def build_assistant_message(agent, assistant_message, finish_reason: str) -> dic
     # multi-turn continuity. These get replayed as input on the next turn.
     codex_items = getattr(assistant_message, "codex_reasoning_items", None)
     if codex_items:
-        msg["codex_reasoning_items"] = codex_items
+        msg["codex_reasoning_items"] = _redact_codex_reasoning_items(codex_items)
 
     # Codex Responses API: preserve structured assistant message items (with
     # id/phase) so follow-up turns can replay them instead of flattening to

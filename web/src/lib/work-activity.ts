@@ -134,6 +134,18 @@ export function activityFromGatewayEvent(
     };
   }
 
+  if (type === "message.commentary") {
+    const text = asText(candidate.text);
+    if (!text) return null;
+    return {
+      id: workActivityKey(type, payload, timestamp),
+      kind: "status",
+      title: text,
+      status: "info",
+      timestamp,
+    };
+  }
+
   if (type === "status.update") {
     const kind = asText(candidate.kind);
     const text = asText(candidate.text);

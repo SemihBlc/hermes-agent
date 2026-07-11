@@ -256,6 +256,22 @@ export function useGatewayEventHandler(deps: GatewayEventDeps) {
         if (isActiveEvent) {
           setTurnStartedAt(Date.now())
         }
+      } else if (event.type === 'message.commentary') {
+        const text = coerceGatewayText(payload?.text)
+
+        if (sessionId && text) {
+          updateSessionState(sessionId, state => ({
+            ...state,
+            messages: [
+              ...state.messages,
+              {
+                id: `commentary-${Date.now()}-${state.messages.length}`,
+                role: 'assistant',
+                parts: [textPart(text)]
+              }
+            ]
+          }))
+        }
       } else if (event.type === 'message.delta') {
         if (sessionId) {
           appendAssistantDelta(sessionId, coerceGatewayText(payload?.text))
@@ -572,7 +588,7 @@ export function useGatewayEventHandler(deps: GatewayEventDeps) {
       } else if (event.type === 'review.summary') {
         // Self-improvement background review saved something to memory/skills
         // and emitted a persistent summary (Python formats it as
-        // "💾 Self-improvement review: …"). The CLI prints this via
+        // "Self-improvement review: …"). The CLI prints this via
         // prompt_toolkit and the Ink TUI renders it as a system line; the
         // desktop has neither, so without this handler the skill/memory
         // change happens silently. Surface it as a persistent system message

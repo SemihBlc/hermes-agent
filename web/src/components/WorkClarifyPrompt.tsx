@@ -83,6 +83,7 @@ export function WorkClarifyPrompt({ onRespond, request, submitting }: WorkClarif
                   }}
                   onFocus={() => setSelectedChoice(null)}
                   onKeyDown={handleAnswerKeyDown}
+                  aria-label="Andere Antwort eingeben"
                   placeholder="Andere Antwort"
                   className="min-h-16 resize-y rounded-xl border border-current/15 bg-background-base/70 px-3 py-2 text-sm text-text-primary outline-none placeholder:text-text-tertiary focus:border-primary/60"
                 />
@@ -95,6 +96,7 @@ export function WorkClarifyPrompt({ onRespond, request, submitting }: WorkClarif
                 disabled={submitting}
                 onChange={(event) => setDraft(event.target.value)}
                 onKeyDown={handleAnswerKeyDown}
+                aria-label="Antwort eingeben"
                 placeholder="Antwort eingeben…"
                 className="min-h-16 resize-y rounded-xl border border-current/15 bg-background-base/70 px-3 py-2 text-sm text-text-primary outline-none placeholder:text-text-tertiary focus:border-primary/60"
               />

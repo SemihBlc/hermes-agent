@@ -7206,6 +7206,26 @@ class TestPersistUserMessageOverride:
         first_db_write = agent._session_db.append_message.call_args_list[0].kwargs
         assert first_db_write["content"] == "Hello there"
 
+    def test_image_only_model_context_persists_only_neutral_attachment_marker(self, agent):
+        agent._session_db = MagicMock()
+        agent.session_id = "image-session"
+        agent._last_flushed_db_idx = 0
+        agent._persist_user_message_idx = 0
+        agent._persist_user_message_override = "[Image attachment]"
+        messages = [
+            {"role": "user", "content": "PRIVATE MODEL-ONLY IMAGE CONTEXT"},
+            {"role": "assistant", "content": "I inspected the image."},
+        ]
+
+        agent._persist_session(messages, [])
+
+        # The live model context remains available for the active turn, but the
+        # durable transcript receives only the neutral user-visible marker.
+        assert messages[0]["content"] == "PRIVATE MODEL-ONLY IMAGE CONTEXT"
+        first_db_write = agent._session_db.append_message.call_args_list[0].kwargs
+        assert first_db_write["content"] == "[Image attachment]"
+        assert "PRIVATE MODEL-ONLY" not in first_db_write["content"]
+
 
 class TestReasoningReplayForStrictProviders:
     """Assistant replay must preserve provider-native reasoning fields."""

@@ -936,9 +936,12 @@ async def test_fetch_channel_context_reply_target_in_primary_window_not_duplicat
     assert result.count("recent reply target") == 1
 
 
-def test_nonconversational_fallback_requires_self_improvement_emoji():
+def test_nonconversational_fallback_recognizes_current_and_legacy_self_improvement_summaries():
     assert discord_platform._looks_like_nonconversational_history_message(
-        "💾 Self-improvement review: Memory updated"
+        "Self-improvement review: Memory updated"
+    )
+    assert discord_platform._looks_like_nonconversational_history_message(
+        "💾 Self-improvement review: Skill 'legacy' patched"
     )
     assert not discord_platform._looks_like_nonconversational_history_message(
         "Self-improvement review: this is a normal assistant heading"

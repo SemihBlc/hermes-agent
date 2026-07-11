@@ -67,7 +67,16 @@ _DISCORD_NONCONVERSATIONAL_METADATA_KEYS = frozenset({
 # so they don't partition history after an upgrade. New emitters should set the
 # metadata flag, not rely on a regex here.
 _DISCORD_NONCONVERSATIONAL_HISTORY_MESSAGE_PATTERNS = (
-    re.compile(r"^\s*💾\s*Self-improvement review:\s+\S[\s\S]*$", re.IGNORECASE),
+    # Current summaries omit the decorative save emoji. Keep accepting the
+    # legacy emoji form, but require a known action-style lead so an ordinary
+    # assistant heading such as "Self-improvement review: this is ..." does not
+    # disappear from channel history.
+    re.compile(
+        r"^\s*(?:💾\s*)?Self-improvement review:\s+"
+        r"(?=(?:Memory|User profile|Skill|Created|Updated|Patched|Deleted|Wrote|Removed)\b)"
+        r"\S[\s\S]*$",
+        re.IGNORECASE,
+    ),
     # Legacy/background-review test doubles used this shorter form before the
     # self-improvement prefix became the stable emitter contract.
     re.compile(

@@ -305,14 +305,37 @@ class TestFormatFooter:
     def test_empty_returns_empty_string(self):
         assert AIAgent._format_file_mutation_failure_footer({}) == ""
 
+    def test_recovered_file_then_later_failed_edit_is_worded_as_attempt_failure(self):
+        agent = _bare_agent()
+        agent._record_file_mutation_result(
+            "patch",
+            {"mode": "replace", "path": "/tmp/a.md", "old_string": "x", "new_string": "y"},
+            json.dumps({"success": True, "diff": "..."}),
+            is_error=False,
+        )
+        agent._record_file_mutation_result(
+            "patch",
+            {"mode": "replace", "path": "/tmp/a.md", "old_string": "missing", "new_string": "z"},
+            json.dumps({"error": "Found 2 matches"}),
+            is_error=True,
+        )
+
+        out = agent._format_file_mutation_failure_footer(
+            getattr(agent, "_turn_failed_file_mutations")
+        )
+
+        assert "attempted file change did not apply" in out
+        assert "Earlier edits to the same file may still have succeeded" in out
+        assert "were NOT modified" not in out
+
     def test_single_failure(self):
         out = AIAgent._format_file_mutation_failure_footer(
             {"/tmp/a.md": {"tool": "patch", "error_preview": "Could not find old_string"}},
         )
-        assert "1 file(s) were NOT modified" in out
+        assert "attempted file change did not apply" in out
         assert "/tmp/a.md" in out
         assert "Could not find old_string" in out
-        assert "git status" in out  # user-actionable hint
+        assert "verify" in out.lower()
 
     def test_truncation_at_10_entries(self):
         failed = {
@@ -320,7 +343,8 @@ class TestFormatFooter:
             for i in range(15)
         }
         out = AIAgent._format_file_mutation_failure_footer(failed)
-        assert "15 file(s) were NOT modified" in out
+        assert "15 attempted file changes did not apply" in out
+        assert "listed failed changes before relying on them" in out
         assert "… and 5 more" in out
         # Ten file bullets + header + "and X more" line
         lines = out.split("\n")

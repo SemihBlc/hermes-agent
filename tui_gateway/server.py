@@ -1415,7 +1415,7 @@ def _start_agent_build(sid: str, session: dict) -> None:
                 pass
 
             _wire_callbacks(sid)
-            # Surface the self-improvement review's "💾 …" summary as an event
+            # Surface the self-improvement review summary as an event
             # the TUI/desktop render in-transcript, honoring
             # display.memory_notifications. _init_session wires this for the
             # eager/branch paths; deferred-built sessions (session.create and the
@@ -2577,7 +2577,7 @@ def _load_memory_notifications() -> str:
 
     Parity with the messaging gateway (``gateway/run.py``) and the classic CLI:
     ``display.memory_notifications`` controls whether the background review's
-    "💾 Self-improvement review: …" summary is surfaced. Without this the
+    "Self-improvement review: …" summary is surfaced. Without this the
     TUI/desktop backend always behaved as ``"on"`` and silently ignored a user
     who set ``off``. Accepts ``off`` / ``on`` (default) / ``verbose``; a bool is
     normalized for back-compat.
@@ -3880,7 +3880,7 @@ def _agent_cbs(sid: str) -> dict:
         ),
         "interim_assistant_callback": lambda text, already_streamed=False: None
         if already_streamed
-        else _emit("message.delta", sid, {"text": text}),
+        else _emit("message.commentary", sid, {"text": text}),
         "status_callback": lambda kind, text=None: _status_update(
             sid, str(kind), None if text is None else str(text)
         ),
@@ -4715,7 +4715,7 @@ def _init_session(
         load_permanent_allowlist()
     except Exception:
         pass
-    # Surface the self-improvement background review's "💾 …" summary as a
+    # Surface the self-improvement background review summary as a
     # review.summary event so Ink can render it as a persistent system line
     # in the transcript. In the CLI path this message is printed via
     # prompt_toolkit; the TUI has no equivalent print surface, so without
@@ -4761,7 +4761,7 @@ def _resolve_checkpoint_hash(mgr, cwd: str, ref: str) -> str:
 
 
 def _enrich_with_attached_images(user_text: str, image_paths: list[str]) -> str:
-    """Pre-analyze attached images via vision and prepend descriptions to user text."""
+    """Pre-analyze attached images and keep image-only intent inside hidden context."""
     import asyncio, json as _json
     from tools.vision_tools import vision_analyze_tool
 
@@ -4770,6 +4770,15 @@ def _enrich_with_attached_images(user_text: str, image_paths: list[str]) -> str:
         "Include any text, code, data, objects, people, layout, colors, "
         "and any other notable visual information."
     )
+    image_only_prompt = (
+        "Analyze this image in the context of our current conversation. "
+        "Identify what is likely relevant, answer any implicit question or concern "
+        "visible in it, and suggest one concrete next step. Avoid a generic inventory "
+        "of visible objects. If the intended task is genuinely unclear, ask one "
+        "specific clarifying question."
+    )
+    text = user_text or ""
+    hidden_intent = f"\n\nImage-only request: {image_only_prompt}" if not text.strip() else ""
 
     parts: list[str] = []
     for path in image_paths:
@@ -4783,18 +4792,19 @@ def _enrich_with_attached_images(user_text: str, image_paths: list[str]) -> str:
             )
             desc = r.get("analysis", "") if r.get("success") else None
             parts.append(
-                f"[The user attached an image:\n{desc}]\n{hint}"
+                f"[The user attached an image:\n{desc}{hidden_intent}]\n{hint}"
                 if desc
-                else f"[The user attached an image but analysis failed.]\n{hint}"
+                else f"[The user attached an image but analysis failed.{hidden_intent}]\n{hint}"
             )
         except Exception:
-            parts.append(f"[The user attached an image but analysis failed.]\n{hint}")
+            parts.append(
+                f"[The user attached an image but analysis failed.{hidden_intent}]\n{hint}"
+            )
 
-    text = user_text or ""
     prefix = "\n\n".join(parts)
     if prefix:
         return f"{prefix}\n\n{text}" if text else prefix
-    return text or "What do you see in this image?"
+    return text or image_only_prompt
 
 
 def _content_display_text(content: Any) -> str:
@@ -9039,8 +9049,21 @@ def _run_prompt_submit(rid, sid: str, session: dict, text: Any) -> None:
                 "stream_callback": _stream,
             }
             try:
-                if "task_id" in inspect.signature(agent.run_conversation).parameters:
+                run_parameters = inspect.signature(agent.run_conversation).parameters
+                if "task_id" in run_parameters:
                     run_kwargs["task_id"] = session["session_key"]
+                if images and "persist_user_message" in run_parameters:
+                    visible_text = text if isinstance(text, str) else str(text or "")
+                    image_label = (
+                        "[Image attachment]"
+                        if len(images) == 1
+                        else f"[{len(images)} image attachments]"
+                    )
+                    run_kwargs["persist_user_message"] = (
+                        f"{visible_text.rstrip()}\n{image_label}"
+                        if visible_text.strip()
+                        else image_label
+                    )
             except (TypeError, ValueError):
                 pass
             result = agent.run_conversation(run_message, **run_kwargs)

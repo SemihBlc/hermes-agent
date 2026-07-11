@@ -2926,11 +2926,14 @@ class AIAgent:
         """
         if not failed:
             return ""
+        count = len(failed)
+        change_word = "change" if count == 1 else "changes"
+        reference_word = "it" if count == 1 else "them"
         lines = [
-            "⚠️ File-mutation verifier: "
-            f"{len(failed)} file(s) were NOT modified this turn despite any "
-            "wording above that may suggest otherwise. Run `git status` or "
-            "`read_file` to confirm."
+            "⚠️ File-mutation check: "
+            f"{count} attempted file {change_word} did not apply. "
+            "Earlier edits to the same file may still have succeeded; verify "
+            f"the listed failed {change_word} before relying on {reference_word}."
         ]
         shown = 0
         for path, info in failed.items():

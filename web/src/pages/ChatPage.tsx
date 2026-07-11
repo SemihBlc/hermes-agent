@@ -240,6 +240,7 @@ export default function ChatPage({ isActive = true }: { isActive?: boolean }) {
   const fitRef = useRef<FitAddon | null>(null);
   const wsRef = useRef<WebSocket | null>(null);
   const uploadInputRef = useRef<HTMLInputElement | null>(null);
+  const uploadInFlightRef = useRef(false);
   const uploadSequenceRef = useRef(0);
   const uploadDragDepthRef = useRef(0);
   const uploadNoticeTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -539,13 +540,14 @@ export default function ChatPage({ isActive = true }: { isActive?: boolean }) {
 
   const uploadFilesToChat = useCallback(
     async (files: File[]) => {
-      if (!files.length || uploading) return;
+      if (!files.length || uploadInFlightRef.current) return;
       const ws = wsRef.current;
       if (!ws || ws.readyState !== WebSocket.OPEN) {
         setBanner("Chat ist noch nicht verbunden — bitte kurz warten und den Upload erneut versuchen.");
         return;
       }
 
+      uploadInFlightRef.current = true;
       setUploading(true);
       setUploadNotice(`Lade ${files.length} Datei${files.length === 1 ? "" : "en"} hoch …`);
       const attachments: ChatUploadAttachment[] = [];
@@ -557,7 +559,7 @@ export default function ChatPage({ isActive = true }: { isActive?: boolean }) {
           const targetPath = chatUploadTargetPath(file, index, sequence, uploadRoot);
           const result = await api.uploadFile(targetPath, file, true);
           attachments.push({
-            name: fallbackUploadFileName(file, index),
+            name: safeUploadFileName(fallbackUploadFileName(file, index)),
             path: result.path,
             mimeType: file.type || result.entry.mime_type || "",
             size: file.size,
@@ -580,10 +582,11 @@ export default function ChatPage({ isActive = true }: { isActive?: boolean }) {
         setBanner(`Upload fehlgeschlagen: ${e}.${partial}`);
         setUploadNotice(null);
       } finally {
+        uploadInFlightRef.current = false;
         setUploading(false);
       }
     },
-    [insertUploadPrompt, showUploadNotice, uploading],
+    [insertUploadPrompt, showUploadNotice],
   );
 
   const handleUploadInputChange = (event: ChangeEvent<HTMLInputElement>) => {
@@ -1594,13 +1597,13 @@ export default function ChatPage({ isActive = true }: { isActive?: boolean }) {
       {mobileModelToolsPortal}
 
       {visibleBanner && (
-        <div className="border border-warning/50 bg-warning/10 text-warning px-3 py-2 text-xs tracking-wide">
+        <div role="alert" className="border border-warning/50 bg-warning/10 text-warning px-3 py-2 text-xs tracking-wide">
           {visibleBanner}
         </div>
       )}
 
       {uploadNotice && (
-        <div className="border border-sky-500/40 bg-sky-500/10 text-sky-300 px-3 py-2 text-xs tracking-wide flex items-center gap-2">
+        <div role="status" aria-live="polite" className="border border-sky-500/40 bg-sky-500/10 text-sky-300 px-3 py-2 text-xs tracking-wide flex items-center gap-2">
           {uploading && <Loader2 className="h-3 w-3 animate-spin shrink-0" />}
           {uploadNotice}
         </div>

@@ -181,9 +181,12 @@ def test_banner_warns_on_pip_install(tmp_path):
     hh = tmp_path / ".hermes"
     hh.mkdir()
     (hh / ".install_method").write_text("pip\n")
+    install_root = tmp_path / "install-root"
+    install_root.mkdir()
 
     with patch("hermes_cli.config.get_hermes_home", return_value=hh), \
-         patch("hermes_constants.get_hermes_home", return_value=hh):
+         patch("hermes_constants.get_hermes_home", return_value=hh), \
+         patch("hermes_cli.config.get_project_root", return_value=install_root):
         buf = io.StringIO()
         # Wide console so the warning isn't wrapped across lines in the panel.
         console = Console(file=buf, width=400, force_terminal=False, color_system=None)
@@ -207,9 +210,12 @@ def test_banner_warns_on_homebrew_install(tmp_path):
     hh = tmp_path / ".hermes"
     hh.mkdir()
     (hh / ".install_method").write_text("homebrew\n")
+    install_root = tmp_path / "install-root"
+    install_root.mkdir()
 
     with patch("hermes_cli.config.get_hermes_home", return_value=hh), \
-         patch("hermes_constants.get_hermes_home", return_value=hh):
+         patch("hermes_constants.get_hermes_home", return_value=hh), \
+         patch("hermes_cli.config.get_project_root", return_value=install_root):
         buf = io.StringIO()
         console = Console(file=buf, width=400, force_terminal=False, color_system=None)
         banner.build_welcome_banner(
@@ -233,9 +239,12 @@ def test_banner_no_pip_warning_on_git_install(tmp_path):
     hh = tmp_path / ".hermes"
     hh.mkdir()
     (hh / ".install_method").write_text("git\n")
+    install_root = tmp_path / "install-root"
+    install_root.mkdir()
 
     with patch("hermes_cli.config.get_hermes_home", return_value=hh), \
-         patch("hermes_constants.get_hermes_home", return_value=hh):
+         patch("hermes_constants.get_hermes_home", return_value=hh), \
+         patch("hermes_cli.config.get_project_root", return_value=install_root):
         buf = io.StringIO()
         console = Console(file=buf, width=400, force_terminal=False, color_system=None)
         banner.build_welcome_banner(

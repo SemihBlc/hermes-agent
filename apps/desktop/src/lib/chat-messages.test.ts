@@ -26,7 +26,25 @@ describe('toChatMessages', () => {
 
     expect(messages).toHaveLength(1)
     expect(messages[0].parts.map(p => p.type)).toEqual(['text', 'tool-call', 'text'])
-    expect(chatMessageText(messages[0])).toBe('Planning.Done.')
+    expect(chatMessageText(messages[0])).toBe('Planning.\n\nDone.')
+  })
+
+  it.each([
+    ['one trailing newline', 'Planning.\n'],
+    ['two trailing newlines', 'Planning.\n\n']
+  ])('does not multiply %s between assistant iterations', (_label, planning) => {
+    const messages = toChatMessages([
+      { role: 'assistant', content: planning, timestamp: 1 },
+      {
+        role: 'assistant',
+        content: '',
+        timestamp: 2,
+        tool_calls: [{ id: 'tc', function: { name: 'terminal', arguments: '{}' } }]
+      },
+      { role: 'assistant', content: 'Done.', timestamp: 3 }
+    ])
+
+    expect(chatMessageText(messages[0])).toBe('Planning.\n\nDone.')
   })
 
   it('keeps assistant tool-call iterations in one loaded assistant bubble', () => {

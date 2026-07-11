@@ -356,6 +356,47 @@ describe('usePromptActions slash.exec dispatch payloads', () => {
   })
 })
 
+describe('usePromptActions image-only submits', () => {
+  afterEach(() => {
+    cleanup()
+    $busy.set(false)
+    vi.restoreAllMocks()
+  })
+
+  it('keeps the model-only image instruction out of the persisted user text', async () => {
+    const calls: { method: string; params?: Record<string, unknown> }[] = []
+
+    const requestGateway = vi.fn(async (method: string, params?: Record<string, unknown>) => {
+      calls.push({ method, params })
+
+      return {} as never
+    })
+
+    const image: ComposerAttachment = {
+      id: 'image-1',
+      kind: 'image',
+      label: 'screenshot.png',
+      previewUrl: 'data:image/png;base64,AAAA'
+    }
+
+    let handle: HarnessHandle | null = null
+    render(
+      <Harness
+        onReady={h => (handle = h)}
+        refreshSessions={async () => undefined}
+        requestGateway={requestGateway}
+      />
+    )
+
+    await handle!.submitText('', { attachments: [image] })
+
+    expect(calls).toContainEqual({
+      method: 'prompt.submit',
+      params: { session_id: RUNTIME_SESSION_ID, text: '' }
+    })
+  })
+})
+
 describe('usePromptActions desktop slash pickers', () => {
   beforeEach(() => {
     setSessions(() => [sessionInfo({ id: '20260610_120000_abcdef', title: 'Loaded session' })])
@@ -1390,6 +1431,7 @@ describe('usePromptActions submit session-context isolation (#54527)', () => {
   it('aborts recovery submit when the user switches sessions during timeout resume', async () => {
     const calls: { method: string; params?: Record<string, unknown> }[] = []
     let submitAttempts = 0
+
     let releaseResume: () => void = () => {}
 
     const selectedStoredSessionIdRef: MutableRefObject<string | null> = { current: STORED_SESSION_A }

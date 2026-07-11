@@ -402,6 +402,96 @@ def test_desktop_build_stamp_round_trip(tmp_path, monkeypatch):
     ) is False
 
 
+def test_desktop_build_stamp_invalidates_changed_signing_identity(tmp_path, monkeypatch):
+    root = _make_desktop_tree(tmp_path)
+    (root / "package.json").write_text("{}", encoding="utf-8")
+    (root / "package-lock.json").write_text("{}", encoding="utf-8")
+    monkeypatch.setattr(cli_main, "PROJECT_ROOT", root)
+    _make_packaged_executable(root, monkeypatch)
+
+    cli_main._write_desktop_build_stamp(
+        root,
+        source_mode=False,
+        signing_identity="Hermes Signing A",
+    )
+
+    assert cli_main._desktop_build_needed(
+        root / "apps" / "desktop",
+        root,
+        source_mode=False,
+        signing_identity="Hermes Signing A",
+    ) is False
+    assert cli_main._desktop_build_needed(
+        root / "apps" / "desktop",
+        root,
+        source_mode=False,
+        signing_identity="Hermes Signing B",
+    ) is True
+
+
+@pytest.mark.parametrize(
+    "env,config_identity,expected",
+    [
+        (
+            {"CSC_NAME": "CSC Identity", "APPLE_SIGNING_IDENTITY": "Apple Identity"},
+            "Config Identity",
+            "CSC Identity",
+        ),
+        (
+            {"APPLE_SIGNING_IDENTITY": "Apple Identity"},
+            "Config Identity",
+            "Apple Identity",
+        ),
+        ({}, "Config Identity", "Config Identity"),
+        ({}, "", ""),
+    ],
+)
+def test_effective_macos_signing_identity_has_one_consistent_precedence(
+    env, config_identity, expected
+):
+    assert cli_main._effective_macos_signing_identity(env, config_identity) == expected
+
+
+def test_gui_build_stamps_and_verifies_effective_environment_signing_identity(
+    tmp_path, monkeypatch
+):
+    root = _make_desktop_tree(tmp_path)
+    desktop_dir = root / "apps" / "desktop"
+    monkeypatch.setattr(cli_main, "PROJECT_ROOT", root)
+    _make_packaged_executable(root, monkeypatch)
+    monkeypatch.setenv("CSC_NAME", "Environment Signing")
+    monkeypatch.delenv("APPLE_SIGNING_IDENTITY", raising=False)
+
+    ok = subprocess.CompletedProcess([], 0)
+    with patch(
+        "hermes_cli.main._desktop_launch_options",
+        return_value=([], "auto", "Config Signing"),
+    ), patch("hermes_cli.main.shutil.which", return_value="/usr/bin/npm"), patch(
+        "hermes_cli.main._run_npm_install_deterministic", return_value=ok
+    ), patch("hermes_cli.main._desktop_build_needed", return_value=True) as build_needed, patch(
+        "hermes_cli.main._verify_desktop_macos_signing_identity", return_value=True
+    ) as verify, patch("hermes_cli.main._write_desktop_build_stamp") as stamp, patch(
+        "hermes_cli.main._desktop_macos_relaunchable_fixup"
+    ), patch("hermes_cli.main.subprocess.run", return_value=ok) as run:
+        cli_main.cmd_gui(_ns(build_only=True))
+
+    build_env = run.call_args.kwargs["env"]
+    assert build_env["CSC_NAME"] == "Environment Signing"
+    assert build_env["APPLE_SIGNING_IDENTITY"] == "Environment Signing"
+    build_needed.assert_called_once_with(
+        desktop_dir,
+        root,
+        source_mode=False,
+        signing_identity="Environment Signing",
+    )
+    verify.assert_called_once_with(desktop_dir, "Environment Signing")
+    stamp.assert_called_once_with(
+        root,
+        source_mode=False,
+        signing_identity="Environment Signing",
+    )
+
+
 def test_compute_desktop_content_hash_works_without_gitignore(tmp_path, monkeypatch):
     """When no .gitignore exists, _compute_desktop_content_hash still works (matches everything)."""
     root = _make_desktop_tree(tmp_path)

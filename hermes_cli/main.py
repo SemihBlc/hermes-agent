@@ -5064,7 +5064,13 @@ def _desktop_stamp_path() -> Path:
     return get_hermes_home() / "desktop-build-stamp.json"
 
 
-def _desktop_build_needed(desktop_dir: Path, project_root: Path, *, source_mode: bool) -> bool:
+def _desktop_build_needed(
+    desktop_dir: Path,
+    project_root: Path,
+    *,
+    source_mode: bool,
+    signing_identity: str = "",
+) -> bool:
     """Return True when the desktop build output is stale or missing.
 
     Compares the current content hash against the saved stamp. Also returns
@@ -5092,6 +5098,13 @@ def _desktop_build_needed(desktop_dir: Path, project_root: Path, *, source_mode:
     if stamp_data.get("sourceMode") != source_mode:
         return True
 
+    # A packaged macOS bundle is also stale when its configured signing identity
+    # changed. The identity name is not secret; persisting it keeps TCC-stable
+    # signatures from being silently skipped by an otherwise matching source hash.
+    expected_signing_identity = signing_identity if sys.platform == "darwin" and not source_mode else ""
+    if stamp_data.get("macosSigningIdentity", "") != expected_signing_identity:
+        return True
+
     saved_hash = stamp_data.get("contentHash")
     if not saved_hash:
         return True
@@ -5100,7 +5113,12 @@ def _desktop_build_needed(desktop_dir: Path, project_root: Path, *, source_mode:
     return current_hash != saved_hash
 
 
-def _write_desktop_build_stamp(project_root: Path, *, source_mode: bool) -> None:
+def _write_desktop_build_stamp(
+    project_root: Path,
+    *,
+    source_mode: bool,
+    signing_identity: str = "",
+) -> None:
     """Write the desktop build stamp after a successful build."""
     stamp_file = _desktop_stamp_path()
     try:
@@ -5110,6 +5128,7 @@ def _write_desktop_build_stamp(project_root: Path, *, source_mode: bool) -> None
         stamp_data = {
             "contentHash": content_hash,
             "sourceMode": source_mode,
+            "macosSigningIdentity": signing_identity if sys.platform == "darwin" and not source_mode else "",
             "builtAt": datetime.now(timezone.utc).isoformat(),
         }
         stamp_file.write_text(json.dumps(stamp_data, indent=2) + "\n", encoding="utf-8")
@@ -5463,6 +5482,47 @@ def _desktop_macos_relaunchable_fixup(desktop_dir: Path, env: dict | None = None
         print(f"  (warning: macOS relaunch fixup skipped: {exc})")
 
 
+def _verify_desktop_macos_signing_identity(
+    desktop_dir: Path,
+    signing_identity: str,
+) -> bool:
+    """Fail closed when a packaged macOS app lacks the expected stable identity."""
+    if sys.platform != "darwin" or not signing_identity:
+        return True
+
+    exe = _desktop_packaged_executable(desktop_dir)
+    if exe is None:
+        return False
+    app = exe.parents[2]
+    if not str(app).endswith(".app") or not app.is_dir():
+        return False
+
+    codesign = shutil.which("codesign")
+    if not codesign:
+        return False
+
+    try:
+        verified = subprocess.run(
+            [codesign, "--verify", "--deep", "--strict", str(app)],
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+        if verified.returncode != 0:
+            return False
+        details = subprocess.run(
+            [codesign, "-dv", "--verbose=4", str(app)],
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+    except OSError:
+        return False
+
+    authority = f"Authority={signing_identity}"
+    return details.returncode == 0 and authority in f"{details.stdout}\n{details.stderr}"
+
+
 def _force_adhoc_macos_signing(env: dict, *, source_mode: bool) -> bool:
     """Stop electron-builder grabbing a random keychain identity on self-update.
 
@@ -5612,6 +5672,18 @@ def _desktop_launch_options() -> tuple[list[str], str, str]:
     return flags, disable_gpu, signing_identity
 
 
+def _effective_macos_signing_identity(env: dict, config_identity: str) -> str:
+    """Resolve one identity for builder input, verification, and build stamps."""
+    for value in (
+        env.get("CSC_NAME"),
+        env.get("APPLE_SIGNING_IDENTITY"),
+        config_identity,
+    ):
+        if isinstance(value, str) and value.strip():
+            return value.strip()
+    return ""
+
+
 def cmd_gui(args: argparse.Namespace):
     """Build and launch the native Electron desktop GUI."""
     desktop_dir = PROJECT_ROOT / "apps" / "desktop"
@@ -5647,9 +5719,14 @@ def cmd_gui(args: argparse.Namespace):
     config_electron_flags, config_disable_gpu, config_signing_identity = _desktop_launch_options()
     if config_disable_gpu != "auto" and "HERMES_DESKTOP_DISABLE_GPU" not in os.environ:
         env["HERMES_DESKTOP_DISABLE_GPU"] = config_disable_gpu
-    if config_signing_identity:
-        env.setdefault("CSC_NAME", config_signing_identity)
-        env.setdefault("APPLE_SIGNING_IDENTITY", config_signing_identity)
+    effective_signing_identity = _effective_macos_signing_identity(
+        env,
+        config_signing_identity,
+    )
+    if effective_signing_identity:
+        # Keep every electron-builder/signature path on one canonical identity.
+        env["CSC_NAME"] = effective_signing_identity
+        env["APPLE_SIGNING_IDENTITY"] = effective_signing_identity
 
     source_mode = getattr(args, "source", False)
     skip_build = getattr(args, "skip_build", False)
@@ -5692,8 +5769,22 @@ def cmd_gui(args: argparse.Namespace):
         # skip the npm install + build entirely (saves a ton of useless work).
         # --force-build overrides the stamp and always rebuilds.
         build_needed = force_build or _desktop_build_needed(
-            desktop_dir, PROJECT_ROOT, source_mode=source_mode
+            desktop_dir,
+            PROJECT_ROOT,
+            source_mode=source_mode,
+            signing_identity=effective_signing_identity,
         )
+        if (
+            not build_needed
+            and not source_mode
+            and effective_signing_identity
+            and not _verify_desktop_macos_signing_identity(
+                desktop_dir,
+                effective_signing_identity,
+            )
+        ):
+            print("  ⚠ Cached desktop signature does not match the configured identity; rebuilding.")
+            build_needed = True
         if not build_needed:
             build_label = "source build" if source_mode else "packaged app"
             print(f"✓ Desktop {build_label} is up to date (content stamp matches)")
@@ -5789,9 +5880,22 @@ def cmd_gui(args: argparse.Namespace):
                 # an in-place self-update (otherwise macOS reports "Hermes is
                 # damaged"). No-op on non-macOS and on real-identity builds.
                 _desktop_macos_relaunchable_fixup(desktop_dir, env)
+                if effective_signing_identity and not _verify_desktop_macos_signing_identity(
+                    desktop_dir,
+                    effective_signing_identity,
+                ):
+                    print(
+                        "✗ Desktop bundle was not signed with the effective identity: "
+                        f"{effective_signing_identity}"
+                    )
+                    sys.exit(1)
 
-            # Build succeeded — write the stamp so next run can skip
-            _write_desktop_build_stamp(PROJECT_ROOT, source_mode=source_mode)
+            # Build and signature verification succeeded — only now write the stamp.
+            _write_desktop_build_stamp(
+                PROJECT_ROOT,
+                source_mode=source_mode,
+                signing_identity=effective_signing_identity,
+            )
 
     # --build-only: produce the artifact but do NOT launch. The installer's
     # --update flow drives the rebuild headlessly and then launches the desktop

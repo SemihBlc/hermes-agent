@@ -17,6 +17,18 @@ test('official tip contained by local custom HEAD reports up-to-date', () => {
   )
 })
 
+test('official tip contained by custom HEAD ignores a stale tracking ref', () => {
+  assert.equal(
+    resolveOfficialBehindCount({
+      currentSha: 'custom-sha',
+      targetSha: 'new-upstream-sha',
+      trackedSha: 'old-upstream-sha',
+      targetIsAncestor: true
+    }),
+    0
+  )
+})
+
 test('official tip not contained by local HEAD remains update-available', () => {
   assert.equal(
     resolveOfficialBehindCount({

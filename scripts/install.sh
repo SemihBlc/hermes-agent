@@ -2815,6 +2815,20 @@ install_desktop() {
         return 1
     fi
 
+    # Resolve the stable macOS identity before every pack attempt so the plain,
+    # retry, and mirror paths all inherit the same electron-builder input.
+    local configured_signing_identity="${APPLE_SIGNING_IDENTITY:-${CSC_NAME:-}}"
+    if [ "$OS" = "macos" ] && [ -z "$configured_signing_identity" ]; then
+        local config_python="$INSTALL_DIR/venv/bin/python"
+        if [ -x "$config_python" ]; then
+            configured_signing_identity="$(PYTHONPATH="$INSTALL_DIR" "$config_python" -c 'from hermes_cli.config import load_config; value=((load_config() or {}).get("desktop") or {}).get("macos_signing_identity", ""); print(value.strip() if isinstance(value, str) else "")' 2>/dev/null || true)"
+        fi
+    fi
+    if [ "$OS" = "macos" ] && [ -n "$configured_signing_identity" ]; then
+        export CSC_NAME="$configured_signing_identity"
+        export APPLE_SIGNING_IDENTITY="$configured_signing_identity"
+    fi
+
     # 2. Build, with up to three escalating attempts so a transient/blocked
     #    Electron download self-heals instead of failing the whole install:
     #      a) plain `npm run pack` (downloads Electron from GitHub),
@@ -2913,17 +2927,16 @@ install_desktop() {
         fi
     fi
 
-    # macOS: make a local self-update relaunchable. A configured stable signing
-    # identity is handled by `hermes desktop --build-only`; never overwrite that
-    # signature with an ad-hoc cdhash here.
-    local configured_signing_identity="${APPLE_SIGNING_IDENTITY:-${CSC_NAME:-}}"
-    if [ "$OS" = "macos" ] && [ -z "$configured_signing_identity" ]; then
-        local config_python="$INSTALL_DIR/venv/bin/python"
-        if [ -x "$config_python" ]; then
-            configured_signing_identity="$(PYTHONPATH="$INSTALL_DIR" "$config_python" -c 'from hermes_cli.config import load_config; value=((load_config() or {}).get("desktop") or {}).get("macos_signing_identity", ""); print(value.strip() if isinstance(value, str) else "")' 2>/dev/null || true)"
+    # macOS: verify a configured stable identity fail-closed. Without one, keep
+    # the local ad-hoc signature relaunchable after an in-place self-update.
+    if [ "$OS" = "macos" ] && [ -n "$configured_signing_identity" ]; then
+        if ! command -v codesign >/dev/null 2>&1 \
+            || ! codesign --verify --deep --strict "$app" >/dev/null 2>&1 \
+            || ! codesign -dv --verbose=4 "$app" 2>&1 | grep -Fq "Authority=$configured_signing_identity"; then
+            log_error "Desktop bundle was not signed with configured identity: $configured_signing_identity"
+            return 1
         fi
-    fi
-    if [ "$OS" = "macos" ] && [ -z "${CSC_LINK:-}" ] && [ -z "$configured_signing_identity" ] && command -v codesign >/dev/null 2>&1; then
+    elif [ "$OS" = "macos" ] && [ -z "${CSC_LINK:-}" ] && command -v codesign >/dev/null 2>&1; then
         xattr -cr "$app" 2>/dev/null || true
         codesign --force --deep --sign - "$app" >/dev/null 2>&1 || true
     fi

@@ -2139,12 +2139,11 @@ async function checkUpdates() {
   if (isOfficialSshRemote(originUrl)) {
     const git = args => runGit(args, { cwd: updateRoot }).then(r => r.stdout.trim())
 
-    const [currentSha, target, dirtyStr, currentBranch, trackedSha] = await Promise.all([
+    const [currentSha, target, dirtyStr, currentBranch] = await Promise.all([
       git(['rev-parse', 'HEAD']),
       runGit(['ls-remote', OFFICIAL_REPO_HTTPS_URL, `refs/heads/${branch}`], { cwd: updateRoot }),
       git(['status', '--porcelain']),
-      git(['rev-parse', '--abbrev-ref', 'HEAD']),
-      git(['rev-parse', `origin/${branch}`])
+      git(['rev-parse', '--abbrev-ref', 'HEAD'])
     ])
 
     const targetSha = firstLine(target.stdout).split(/\s+/)[0] || ''
@@ -2161,9 +2160,9 @@ async function checkUpdates() {
     }
 
     const targetIsAncestor =
-      trackedSha === targetSha &&
-      (await runGit(['merge-base', '--is-ancestor', `origin/${branch}`, 'HEAD'], { cwd: updateRoot })).code === 0
-    const behind = resolveOfficialBehindCount({ currentSha, targetSha, trackedSha, targetIsAncestor })
+      (await runGit(['merge-base', '--is-ancestor', targetSha, 'HEAD'], { cwd: updateRoot })).code === 0
+
+    const behind = resolveOfficialBehindCount({ currentSha, targetSha, targetIsAncestor })
 
     return {
       supported: true,

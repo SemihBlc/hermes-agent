@@ -186,6 +186,64 @@ class LongPreviewAgent:
         }
 
 
+class SingleLineProgressAgent:
+    """Emits long previews plus one skill call that remains exempt."""
+
+    def __init__(self, **kwargs):
+        self.tool_progress_callback = kwargs.get("tool_progress_callback")
+        self.tools = []
+
+    def run_conversation(self, message, conversation_history=None, task_id=None):
+        cb = self.tool_progress_callback
+        assert cb is not None
+        cb(
+            "tool.started",
+            "search_files",
+            "File-mutation verifier · were NOT modified this turn · fallback",
+            {"pattern": "File-mutation verifier|were NOT modified this turn|fallback"},
+        )
+        time.sleep(0.35)
+        cb(
+            "tool.started",
+            "terminal",
+            "pytest tests/gateway/test_run_progress_topics.py --verbose",
+            {"command": "pytest tests/gateway/test_run_progress_topics.py --verbose"},
+        )
+        time.sleep(0.35)
+        cb(
+            "tool.started",
+            "skill_view",
+            "very-long-skill-name-that-must-remain-fully-visible",
+            {"name": "very-long-skill-name-that-must-remain-fully-visible"},
+        )
+        time.sleep(0.35)
+        return {"final_response": "done", "messages": [], "api_calls": 1}
+
+
+class TerminalCommandProgressAgent:
+    """Agent that emits the real terminal args used by fenced progress."""
+
+    def __init__(self, **kwargs):
+        self.tool_progress_callback = kwargs.get("tool_progress_callback")
+        self.tools = []
+
+    def run_conversation(self, message, conversation_history=None, task_id=None):
+        cb = self.tool_progress_callback
+        assert cb is not None
+        cb(
+            "tool.started",
+            "terminal",
+            "printf compact-progress",
+            {"command": "printf compact-progress"},
+        )
+        time.sleep(0.35)
+        return {
+            "final_response": "done",
+            "messages": [],
+            "api_calls": 1,
+        }
+
+
 class DelayedProgressAgent:
     def __init__(self, **kwargs):
         self.tool_progress_callback = kwargs.get("tool_progress_callback")
@@ -268,6 +326,114 @@ def _make_runner(adapter):
         stt_enabled=False,
     )
     return runner
+
+
+@pytest.mark.asyncio
+async def test_telegram_progress_caps_non_skill_lines(monkeypatch, tmp_path):
+    """Non-skill Telegram progress fits one mobile line; skill names stay whole."""
+    monkeypatch.setenv("HERMES_TOOL_PROGRESS_MODE", "all")
+
+    fake_dotenv = types.ModuleType("dotenv")
+    setattr(fake_dotenv, "load_dotenv", lambda *args, **kwargs: None)
+    monkeypatch.setitem(sys.modules, "dotenv", fake_dotenv)
+
+    fake_run_agent = types.ModuleType("run_agent")
+    setattr(fake_run_agent, "AIAgent", SingleLineProgressAgent)
+    monkeypatch.setitem(sys.modules, "run_agent", fake_run_agent)
+    import tools.terminal_tool  # noqa: F401 - register terminal progress metadata
+
+    adapter = ProgressCaptureAdapter()
+    adapter.supports_code_blocks = True
+    runner = _make_runner(adapter)
+    gateway_run = importlib.import_module("gateway.run")
+    monkeypatch.setattr(gateway_run, "_hermes_home", tmp_path)
+    monkeypatch.setattr(gateway_run, "_resolve_runtime_agent_kwargs", lambda: {"api_key": "fake"})
+    monkeypatch.setattr(
+        gateway_run,
+        "_load_gateway_config",
+        lambda: {
+            "display": {
+                "platforms": {
+                    "telegram": {
+                        "tool_progress_code_blocks": False,
+                        "tool_progress_compact_labels": True,
+                        "tool_progress_line_length": 34,
+                        "tool_preview_length": 80,
+                    },
+                }
+            }
+        },
+    )
+
+    source = SessionSource(platform=Platform.TELEGRAM, chat_id="8686982681")
+    result = await runner._run_agent(
+        message="hello",
+        context_prompt="",
+        history=[],
+        source=source,
+        session_id="sess-single-line-progress",
+        session_key="agent:main:telegram:direct:8686982681",
+    )
+
+    assert result["final_response"] == "done"
+    delivered = [item["content"] for item in adapter.sent + adapter.edits]
+    assert delivered
+    final_lines = delivered[-1].splitlines()
+    assert any("very-long-skill-name-that-must-remain-fully-visible" in line for line in final_lines)
+    assert any("Files ·" in line for line in final_lines)
+    assert any("Run ·" in line for line in final_lines)
+    for line in final_lines:
+        if "Reading skill" not in line:
+            assert len(line) <= 34, line
+
+
+@pytest.mark.asyncio
+async def test_terminal_progress_respects_code_blocks_disabled(monkeypatch, tmp_path):
+    """Telegram can keep terminal progress visible without fenced blocks."""
+    monkeypatch.setenv("HERMES_TOOL_PROGRESS_MODE", "all")
+
+    fake_dotenv = types.ModuleType("dotenv")
+    setattr(fake_dotenv, "load_dotenv", lambda *args, **kwargs: None)
+    monkeypatch.setitem(sys.modules, "dotenv", fake_dotenv)
+
+    fake_run_agent = types.ModuleType("run_agent")
+    setattr(fake_run_agent, "AIAgent", TerminalCommandProgressAgent)
+    monkeypatch.setitem(sys.modules, "run_agent", fake_run_agent)
+    import tools.terminal_tool  # noqa: F401 - register terminal progress metadata
+
+    adapter = ProgressCaptureAdapter()
+    adapter.supports_code_blocks = True
+    runner = _make_runner(adapter)
+    gateway_run = importlib.import_module("gateway.run")
+    monkeypatch.setattr(gateway_run, "_hermes_home", tmp_path)
+    monkeypatch.setattr(gateway_run, "_resolve_runtime_agent_kwargs", lambda: {"api_key": "fake"})
+    monkeypatch.setattr(
+        gateway_run,
+        "_load_gateway_config",
+        lambda: {
+            "display": {
+                "platforms": {
+                    "telegram": {"tool_progress_code_blocks": False},
+                }
+            }
+        },
+    )
+
+    source = SessionSource(platform=Platform.TELEGRAM, chat_id="8686982681")
+    result = await runner._run_agent(
+        message="hello",
+        context_prompt="",
+        history=[],
+        source=source,
+        session_id="sess-no-progress-fences",
+        session_key="agent:main:telegram:direct:8686982681",
+    )
+
+    assert result["final_response"] == "done"
+    delivered = [item["content"] for item in adapter.sent + adapter.edits]
+    assert delivered
+    assert all("```" not in content for content in delivered)
+    assert any("printf compact-progress" in content for content in delivered)
 
 
 @pytest.mark.asyncio
