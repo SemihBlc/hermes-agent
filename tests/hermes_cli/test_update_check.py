@@ -129,6 +129,54 @@ def test_check_for_updates_official_ssh_origin_uses_https_probe(tmp_path):
     assert ["git", "fetch", "origin", "--quiet"] not in calls
 
 
+def test_check_via_official_ssh_custom_commit_ahead_is_up_to_date(tmp_path):
+    """The passive HTTPS probe accepts a local commit carrying upstream/main."""
+    import hermes_cli.banner as banner
+
+    repo_dir = tmp_path / "hermes-agent"
+    repo_dir.mkdir()
+    (repo_dir / ".git").mkdir()
+
+    calls = []
+
+    def fake_run(cmd, **kwargs):
+        calls.append(cmd)
+        if cmd == ["git", "remote", "get-url", "origin"]:
+            return MagicMock(
+                returncode=0,
+                stdout="git@github.com:NousResearch/hermes-agent.git\n",
+            )
+        if cmd == ["git", "rev-parse", "HEAD"]:
+            return MagicMock(returncode=0, stdout="custom-sha\n")
+        if cmd == [
+            "git",
+            "ls-remote",
+            "https://github.com/NousResearch/hermes-agent.git",
+            "refs/heads/main",
+        ]:
+            return MagicMock(
+                returncode=0,
+                stdout="upstream-sha\trefs/heads/main\n",
+            )
+        if cmd == ["git", "rev-parse", "origin/main"]:
+            return MagicMock(returncode=0, stdout="upstream-sha\n")
+        if cmd == [
+            "git",
+            "merge-base",
+            "--is-ancestor",
+            "origin/main",
+            "HEAD",
+        ]:
+            return MagicMock(returncode=0, stdout="")
+        raise AssertionError(f"unexpected git command: {cmd!r}")
+
+    with patch("hermes_cli.banner.subprocess.run", side_effect=fake_run):
+        result = banner._check_via_local_git(repo_dir)
+
+    assert result == 0
+    assert not any(cmd[:2] == ["git", "fetch"] for cmd in calls)
+
+
 def test_check_via_local_git_shallow_clone_behind_reports_no_count(tmp_path):
     """Shallow installer clones must report presence-only, never a bogus count.
 
@@ -189,6 +237,38 @@ def test_check_via_local_git_shallow_clone_up_to_date(tmp_path):
             return MagicMock(returncode=0, stdout="same-sha\n")
         if cmd == ["git", "rev-parse", "FETCH_HEAD"]:
             return MagicMock(returncode=0, stdout="same-sha\n")
+        raise AssertionError(f"unexpected git command: {cmd!r}")
+
+    with patch("hermes_cli.banner.subprocess.run", side_effect=fake_run):
+        result = banner._check_via_local_git(repo_dir)
+
+    assert result == 0
+
+
+def test_check_via_local_git_shallow_custom_commit_ahead_is_up_to_date(tmp_path):
+    """A shallow custom branch containing origin/main must not show an update."""
+    import hermes_cli.banner as banner
+
+    repo_dir = tmp_path / "hermes-agent"
+    repo_dir.mkdir()
+    (repo_dir / ".git").mkdir()
+
+    def fake_run(cmd, **kwargs):
+        if cmd == ["git", "remote", "get-url", "origin"]:
+            return MagicMock(
+                returncode=0,
+                stdout="https://github.com/NousResearch/hermes-agent.git\n",
+            )
+        if cmd == ["git", "rev-parse", "--is-shallow-repository"]:
+            return MagicMock(returncode=0, stdout="true\n")
+        if cmd[:2] == ["git", "fetch"]:
+            return MagicMock(returncode=0, stdout="")
+        if cmd == ["git", "rev-parse", "HEAD"]:
+            return MagicMock(returncode=0, stdout="custom-sha\n")
+        if cmd == ["git", "rev-parse", "FETCH_HEAD"]:
+            return MagicMock(returncode=0, stdout="upstream-sha\n")
+        if cmd == ["git", "merge-base", "--is-ancestor", "FETCH_HEAD", "HEAD"]:
+            return MagicMock(returncode=0, stdout="")
         raise AssertionError(f"unexpected git command: {cmd!r}")
 
     with patch("hermes_cli.banner.subprocess.run", side_effect=fake_run):

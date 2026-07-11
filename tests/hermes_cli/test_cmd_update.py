@@ -799,6 +799,42 @@ class TestCmdUpdateCheckBranchFlag:
         rev_list_cmds = [c for c in commands if "rev-list" in c]
         assert any("upstream/main" in c for c in rev_list_cmds), rev_list_cmds
 
+    @patch("hermes_cli.config.detect_install_method", return_value="git")
+    @patch("subprocess.run")
+    def test_check_shallow_custom_commit_ahead_is_up_to_date(
+        self, mock_run, _mock_method, tmp_path, capsys
+    ):
+        """A custom HEAD containing origin/main must not be reported behind."""
+        project_root = tmp_path / "hermes-agent"
+        (project_root / ".git").mkdir(parents=True)
+
+        def side_effect(cmd, **kwargs):
+            joined = " ".join(str(c) for c in cmd)
+            if "rev-parse --is-shallow-repository" in joined:
+                return subprocess.CompletedProcess(cmd, 0, stdout="true\n", stderr="")
+            if "fetch --depth 1 upstream main" in joined:
+                return subprocess.CompletedProcess(cmd, 128, stdout="", stderr="missing\n")
+            if "fetch --depth 1 origin main" in joined:
+                return subprocess.CompletedProcess(cmd, 0, stdout="", stderr="")
+            if "rev-parse --verify --quiet origin/main" in joined:
+                return subprocess.CompletedProcess(cmd, 0, stdout="", stderr="")
+            if joined.endswith("rev-parse HEAD"):
+                return subprocess.CompletedProcess(cmd, 0, stdout="custom-sha\n", stderr="")
+            if joined.endswith("rev-parse origin/main"):
+                return subprocess.CompletedProcess(cmd, 0, stdout="upstream-sha\n", stderr="")
+            if "merge-base --is-ancestor origin/main HEAD" in joined:
+                return subprocess.CompletedProcess(cmd, 0, stdout="", stderr="")
+            raise AssertionError(f"unexpected command: {cmd!r}")
+
+        mock_run.side_effect = side_effect
+        args = SimpleNamespace(check=True, branch=None)
+        with patch("hermes_cli.main.PROJECT_ROOT", project_root):
+            cmd_update(args)
+
+        out = capsys.readouterr().out
+        assert "Already up to date" in out
+        assert "Update available" not in out
+
     @patch("hermes_cli.config.detect_install_method", return_value="pip")
     @patch("hermes_cli.banner.check_via_pypi", return_value=0)
     @patch("subprocess.run")

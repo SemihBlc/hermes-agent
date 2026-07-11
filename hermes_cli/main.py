@@ -8560,6 +8560,11 @@ def _cmd_update_check(branch: str = "main", *, branch_explicit: bool = False):
         if head_sha and target_sha and head_sha == target_sha:
             print("✓ Already up to date.")
         else:
+            from hermes_cli.banner import _git_ref_is_ancestor
+
+            if _git_ref_is_ancestor(PROJECT_ROOT, compare_branch) is True:
+                print("✓ Already up to date.")
+                return
             print(f"⚕ Update available (behind {compare_branch}).")
             from hermes_cli.config import recommended_update_command
 

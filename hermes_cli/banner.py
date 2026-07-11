@@ -170,22 +170,58 @@ def _git_stdout(args: list[str], *, cwd: Path, timeout: int = 5) -> Optional[str
     return (result.stdout or "").strip()
 
 
-def _check_via_rev(local_rev: str) -> Optional[int]:
-    """Compare an embedded git revision to upstream main via ls-remote.
+def _git_ref_is_ancestor(
+    repo_dir: Path,
+    ancestor_ref: str,
+    descendant_ref: str = "HEAD",
+) -> Optional[bool]:
+    """Return whether *ancestor_ref* is contained in *descendant_ref*.
 
-    Returns 0 if up-to-date, ``UPDATE_AVAILABLE_NO_COUNT`` if behind,
-    or ``None`` on failure.
+    ``None`` means Git could not determine ancestry, which is common when the
+    relevant parent lies beyond a shallow boundary. Callers then retain the
+    conservative SHA-comparison behavior.
     """
     try:
         result = subprocess.run(
+            ["git", "merge-base", "--is-ancestor", ancestor_ref, descendant_ref],
+            capture_output=True,
+            text=True,
+            timeout=5,
+            cwd=str(repo_dir),
+        )
+    except Exception:
+        return None
+    if result.returncode == 0:
+        return True
+    if result.returncode == 1:
+        return False
+    return None
+
+
+def _upstream_main_rev() -> Optional[str]:
+    """Read the official upstream main SHA without touching an SSH remote."""
+    try:
+        result = subprocess.run(
             ["git", "ls-remote", _UPSTREAM_REPO_URL, "refs/heads/main"],
-            capture_output=True, text=True, timeout=10,
+            capture_output=True,
+            text=True,
+            timeout=10,
         )
     except Exception:
         return None
     if result.returncode != 0 or not result.stdout:
         return None
     upstream_rev = result.stdout.split()[0]
+    return upstream_rev or None
+
+
+def _check_via_rev(local_rev: str) -> Optional[int]:
+    """Compare an embedded git revision to upstream main via ls-remote.
+
+    Returns 0 if up-to-date, ``UPDATE_AVAILABLE_NO_COUNT`` if behind,
+    or ``None`` on failure.
+    """
+    upstream_rev = _upstream_main_rev()
     if not upstream_rev:
         return None
     return 0 if upstream_rev == local_rev else UPDATE_AVAILABLE_NO_COUNT
@@ -196,10 +232,18 @@ def _check_via_local_git(repo_dir: Path) -> Optional[int]:
     origin_url = _git_stdout(["remote", "get-url", "origin"], cwd=repo_dir)
     if _is_official_ssh_remote(origin_url):
         head_rev = _git_stdout(["rev-parse", "HEAD"], cwd=repo_dir)
-        checked = _check_via_rev(head_rev) if head_rev else None
-        if checked == UPDATE_AVAILABLE_NO_COUNT:
-            return 1
-        return checked
+        upstream_rev = _upstream_main_rev()
+        if not head_rev or not upstream_rev:
+            return None
+        if head_rev == upstream_rev:
+            return 0
+        origin_rev = _git_stdout(["rev-parse", "origin/main"], cwd=repo_dir)
+        if (
+            origin_rev == upstream_rev
+            and _git_ref_is_ancestor(repo_dir, "origin/main") is True
+        ):
+            return 0
+        return 1
 
     # Installer checkouts are shallow (`git clone --depth 1`). On a shallow
     # clone the history stops at a single commit, so a plain `git fetch` would
@@ -230,13 +274,18 @@ def _check_via_local_git(repo_dir: Path) -> Optional[int]:
         # be a tracking ref in a `clone --depth 1`, so prefer FETCH_HEAD (just
         # updated by the fetch above) and fall back to origin/main.
         head_rev = _git_stdout(["rev-parse", "HEAD"], cwd=repo_dir)
-        target_rev = (
-            _git_stdout(["rev-parse", "FETCH_HEAD"], cwd=repo_dir)
-            or _git_stdout(["rev-parse", "origin/main"], cwd=repo_dir)
-        )
+        target_ref = "FETCH_HEAD"
+        target_rev = _git_stdout(["rev-parse", target_ref], cwd=repo_dir)
+        if not target_rev:
+            target_ref = "origin/main"
+            target_rev = _git_stdout(["rev-parse", target_ref], cwd=repo_dir)
         if not head_rev or not target_rev:
             return None
-        return 0 if head_rev == target_rev else UPDATE_AVAILABLE_NO_COUNT
+        if head_rev == target_rev:
+            return 0
+        if _git_ref_is_ancestor(repo_dir, target_ref) is True:
+            return 0
+        return UPDATE_AVAILABLE_NO_COUNT
 
     try:
         result = subprocess.run(
