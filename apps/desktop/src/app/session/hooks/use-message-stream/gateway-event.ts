@@ -259,17 +259,26 @@ export function useGatewayEventHandler(deps: GatewayEventDeps) {
       } else if (event.type === 'message.commentary') {
         const text = coerceGatewayText(payload?.text)
 
-        if (sessionId && text) {
+        if (sessionId && text.trim()) {
+          // Commentary is a complete, user-visible narration block. Flush the
+          // work that preceded it, append the narration at the current point in
+          // time, then close that stream segment so later reasoning/tools seed a
+          // new message below instead of mutating an older message above it.
+          flushQueuedDeltas(sessionId)
           updateSessionState(sessionId, state => ({
             ...state,
+            awaitingResponse: false,
             messages: [
               ...state.messages,
               {
+                branchGroupId: state.pendingBranchGroup ?? undefined,
                 id: `commentary-${Date.now()}-${state.messages.length}`,
                 role: 'assistant',
                 parts: [textPart(text)]
               }
-            ]
+            ],
+            sawAssistantPayload: true,
+            streamId: null
           }))
         }
       } else if (event.type === 'message.delta') {
