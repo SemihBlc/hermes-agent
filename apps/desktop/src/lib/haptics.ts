@@ -85,7 +85,49 @@ const HAPTIC_INTENTS: Record<HapticIntent, HapticConfig> = {
 export type HapticTrigger = (input?: HapticInput, options?: TriggerOptions) => Promise<void> | undefined
 
 let registeredTrigger: HapticTrigger | null = null
+let submitAudioContext: AudioContext | null = null
 let lastSelectionAt = 0
+
+async function playSubmitSound() {
+  if (typeof AudioContext === 'undefined') {
+    return
+  }
+
+  try {
+    submitAudioContext ??= new AudioContext()
+
+    if (submitAudioContext.state === 'suspended') {
+      await submitAudioContext.resume()
+    }
+
+    const context = submitAudioContext
+    const now = context.currentTime
+    const gain = context.createGain()
+    const oscillator = context.createOscillator()
+
+    // A short, audible send cue. The cue has no app-level volume setting:
+    // AudioContext.destination is governed by the Mac's current media output
+    // volume and mute state, so changes in macOS apply immediately.
+    oscillator.type = 'sine'
+    oscillator.frequency.setValueAtTime(760, now)
+    oscillator.frequency.exponentialRampToValueAtTime(1040, now + 0.075)
+    gain.gain.setValueAtTime(0.0001, now)
+    gain.gain.exponentialRampToValueAtTime(0.62, now + 0.006)
+    gain.gain.exponentialRampToValueAtTime(0.0001, now + 0.085)
+    oscillator.connect(gain)
+    gain.connect(context.destination)
+
+    oscillator.onended = () => {
+      oscillator.disconnect()
+      gain.disconnect()
+    }
+
+    oscillator.start(now)
+    oscillator.stop(now + 0.09)
+  } catch {
+    // Missing/unavailable audio output must never block message submission.
+  }
+}
 
 // Global rolling rate-limit. A runaway upstream loop (auth-expiry error-toast
 // storms, reconnect flaps) can request dozens of haptics a second, which the
@@ -98,6 +140,11 @@ let recentFires: number[] = []
 
 export function registerHapticTrigger(trigger: HapticTrigger | null) {
   registeredTrigger = trigger
+
+  if (!trigger && submitAudioContext) {
+    void submitAudioContext.close().catch(() => undefined)
+    submitAudioContext = null
+  }
 }
 
 export function triggerHaptic(intent: HapticIntent = 'selection') {
@@ -122,6 +169,12 @@ export function triggerHaptic(intent: HapticIntent = 'selection') {
   }
 
   recentFires.push(now)
+
+  if (intent === 'submit') {
+    void playSubmitSound()
+
+    return
+  }
 
   const config = HAPTIC_INTENTS[intent]
 
