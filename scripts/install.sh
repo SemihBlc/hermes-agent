@@ -2817,7 +2817,7 @@ install_desktop() {
 
     # Resolve the stable macOS identity before every pack attempt so the plain,
     # retry, and mirror paths all inherit the same electron-builder input.
-    local configured_signing_identity="${APPLE_SIGNING_IDENTITY:-${CSC_NAME:-}}"
+    local configured_signing_identity="${CSC_NAME:-${APPLE_SIGNING_IDENTITY:-}}"
     if [ "$OS" = "macos" ] && [ -z "$configured_signing_identity" ]; then
         local config_python="$INSTALL_DIR/venv/bin/python"
         if [ -x "$config_python" ]; then
