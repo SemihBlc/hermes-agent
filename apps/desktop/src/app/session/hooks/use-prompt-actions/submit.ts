@@ -29,6 +29,9 @@ import {
   withSessionBusyRetry
 } from './utils'
 
+export const IMAGE_ONLY_CONTEXT_PROMPT =
+  'Analyze this image in the context of our current conversation. Identify what is likely relevant, answer any implicit question or concern visible in it, and suggest one concrete next step. Avoid a generic inventory of visible objects. If the intended task is genuinely unclear, ask one specific clarifying question.'
+
 interface SubmitPromptDeps {
   activeSessionId: string | null
   activeSessionIdRef: MutableRefObject<string | null>
@@ -101,7 +104,7 @@ export function useSubmitPrompt(deps: SubmitPromptDeps) {
 
         return (
           [contextRefs, terminalContextBlocks, visibleText].filter(Boolean).join('\n\n') ||
-          (present.some(a => a.kind === 'image') ? 'What do you see in this image?' : '')
+          (present.some(a => a.kind === 'image') ? IMAGE_ONLY_CONTEXT_PROMPT : '')
         )
       }
 

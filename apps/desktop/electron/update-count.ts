@@ -1,3 +1,15 @@
+function resolveOfficialBehindCount({ currentSha, targetSha, trackedSha, targetIsAncestor }) {
+  if (currentSha && targetSha && currentSha === targetSha) {
+    return 0
+  }
+
+  if (trackedSha && trackedSha === targetSha && targetIsAncestor) {
+    return 0
+  }
+
+  return 1
+}
+
 // Whether `git rev-list HEAD..origin/<branch> --count` produces a meaningful
 // number worth computing. On a SHALLOW checkout (installer clones with
 // --depth 1) the local history often shares no merge-base with the freshly
@@ -27,4 +39,4 @@ function resolveBehindCount({ countStr, currentSha, targetSha, isShallow, hasMer
   return Number.parseInt(countStr, 10) || 0
 }
 
-export { resolveBehindCount, shouldCountCommits }
+export { resolveBehindCount, resolveOfficialBehindCount, shouldCountCommits }

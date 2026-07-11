@@ -1,7 +1,33 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
 
-import { resolveBehindCount, shouldCountCommits } from './update-count'
+import { resolveBehindCount, resolveOfficialBehindCount, shouldCountCommits } from './update-count'
+
+// A clean custom branch may be ahead of the official tip. The desktop footer
+// must not turn that into a fake pending update.
+test('official tip contained by local custom HEAD reports up-to-date', () => {
+  assert.equal(
+    resolveOfficialBehindCount({
+      currentSha: 'custom-sha',
+      targetSha: 'upstream-sha',
+      trackedSha: 'upstream-sha',
+      targetIsAncestor: true
+    }),
+    0
+  )
+})
+
+test('official tip not contained by local HEAD remains update-available', () => {
+  assert.equal(
+    resolveOfficialBehindCount({
+      currentSha: 'local-sha',
+      targetSha: 'new-upstream-sha',
+      trackedSha: 'old-upstream-sha',
+      targetIsAncestor: false
+    }),
+    1
+  )
+})
 
 // FAIL-BEFORE: pre-fix the function did `Number.parseInt(countStr) || 0`
 // unconditionally, so a shallow checkout with no merge-base surfaced the bogus

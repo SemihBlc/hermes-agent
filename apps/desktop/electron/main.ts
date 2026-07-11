@@ -103,7 +103,7 @@ import {
   SESSION_WINDOW_MIN_WIDTH
 } from './session-windows'
 import { nativeOverlayWidth as computeNativeOverlayWidth, macTitleBarOverlayHeight } from './titlebar-overlay-width'
-import { resolveBehindCount, shouldCountCommits } from './update-count'
+import { resolveBehindCount, resolveOfficialBehindCount, shouldCountCommits } from './update-count'
 import { readLiveUpdateMarker, writeUpdateMarker } from './update-marker'
 import { runRebuildWithRetry } from './update-rebuild'
 import {
@@ -2139,11 +2139,12 @@ async function checkUpdates() {
   if (isOfficialSshRemote(originUrl)) {
     const git = args => runGit(args, { cwd: updateRoot }).then(r => r.stdout.trim())
 
-    const [currentSha, target, dirtyStr, currentBranch] = await Promise.all([
+    const [currentSha, target, dirtyStr, currentBranch, trackedSha] = await Promise.all([
       git(['rev-parse', 'HEAD']),
       runGit(['ls-remote', OFFICIAL_REPO_HTTPS_URL, `refs/heads/${branch}`], { cwd: updateRoot }),
       git(['status', '--porcelain']),
-      git(['rev-parse', '--abbrev-ref', 'HEAD'])
+      git(['rev-parse', '--abbrev-ref', 'HEAD']),
+      git(['rev-parse', `origin/${branch}`])
     ])
 
     const targetSha = firstLine(target.stdout).split(/\s+/)[0] || ''
@@ -2159,11 +2160,16 @@ async function checkUpdates() {
       }
     }
 
+    const targetIsAncestor =
+      trackedSha === targetSha &&
+      (await runGit(['merge-base', '--is-ancestor', `origin/${branch}`, 'HEAD'], { cwd: updateRoot })).code === 0
+    const behind = resolveOfficialBehindCount({ currentSha, targetSha, trackedSha, targetIsAncestor })
+
     return {
       supported: true,
       branch,
       currentBranch,
-      behind: currentSha && currentSha === targetSha ? 0 : 1,
+      behind,
       currentSha,
       targetSha,
       commits: [],
