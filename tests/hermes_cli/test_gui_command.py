@@ -993,7 +993,7 @@ def test_force_adhoc_signing_noop_for_source_mode(monkeypatch):
     assert "CSC_IDENTITY_AUTO_DISCOVERY" not in env
 
 
-@pytest.mark.parametrize("key", ["CSC_LINK", "APPLE_SIGNING_IDENTITY"])
+@pytest.mark.parametrize("key", ["CSC_LINK", "CSC_NAME", "APPLE_SIGNING_IDENTITY"])
 def test_force_adhoc_signing_preserves_real_identity(monkeypatch, key):
     monkeypatch.setattr(cli_main.sys, "platform", "darwin")
     env = {key: "secret"}
@@ -1013,23 +1013,25 @@ def test_force_adhoc_signing_respects_explicit_caller_flag(monkeypatch):
 
 def test_desktop_launch_options_defaults_when_no_config():
     with patch("hermes_cli.config.load_config", return_value={}):
-        flags, gpu = cli_main._desktop_launch_options()
+        flags, gpu, identity = cli_main._desktop_launch_options()
     assert flags == []
     assert gpu == "auto"
+    assert identity == ""
 
 
 def test_desktop_launch_options_reads_flags_list():
     cfg = {"desktop": {"electron_flags": ["--ozone-platform=x11", "--disable-gpu"]}}
     with patch("hermes_cli.config.load_config", return_value=cfg):
-        flags, gpu = cli_main._desktop_launch_options()
+        flags, gpu, identity = cli_main._desktop_launch_options()
     assert flags == ["--ozone-platform=x11", "--disable-gpu"]
     assert gpu == "auto"
+    assert identity == ""
 
 
 def test_desktop_launch_options_splits_flag_string():
     cfg = {"desktop": {"electron_flags": "--ozone-platform=x11 --disable-gpu"}}
     with patch("hermes_cli.config.load_config", return_value=cfg):
-        flags, _ = cli_main._desktop_launch_options()
+        flags, _, _ = cli_main._desktop_launch_options()
     assert flags == ["--ozone-platform=x11", "--disable-gpu"]
 
 
@@ -1047,12 +1049,22 @@ def test_desktop_launch_options_splits_flag_string():
 def test_desktop_launch_options_normalizes_disable_gpu(raw, expected):
     cfg = {"desktop": {"disable_gpu": raw}}
     with patch("hermes_cli.config.load_config", return_value=cfg):
-        _, gpu = cli_main._desktop_launch_options()
+        _, gpu, _ = cli_main._desktop_launch_options()
     assert gpu == expected
 
 
 def test_desktop_launch_options_survives_config_error():
     with patch("hermes_cli.config.load_config", side_effect=RuntimeError("boom")):
-        flags, gpu = cli_main._desktop_launch_options()
+        flags, gpu, identity = cli_main._desktop_launch_options()
     assert flags == []
     assert gpu == "auto"
+    assert identity == ""
+
+
+def test_desktop_launch_options_reads_macos_signing_identity():
+    cfg = {"desktop": {"macos_signing_identity": "  Hermes Local Code Signing  "}}
+    with patch("hermes_cli.config.load_config", return_value=cfg):
+        flags, gpu, identity = cli_main._desktop_launch_options()
+    assert flags == []
+    assert gpu == "auto"
+    assert identity == "Hermes Local Code Signing"

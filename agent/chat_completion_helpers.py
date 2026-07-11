@@ -1034,6 +1034,36 @@ def build_api_kwargs(agent, api_messages: list) -> dict:
 
 
 
+def _redact_codex_message_items(codex_message_items):
+    """Copy replayable Codex message items with text redacted for persistence."""
+    from agent.redact import redact_sensitive_text
+
+    redacted_items = []
+    for raw_item in codex_message_items:
+        if not isinstance(raw_item, dict):
+            redacted_items.append(raw_item)
+            continue
+        item = dict(raw_item)
+        raw_content = raw_item.get("content")
+        if isinstance(raw_content, list):
+            content = []
+            for raw_part in raw_content:
+                if not isinstance(raw_part, dict):
+                    content.append(raw_part)
+                    continue
+                part = dict(raw_part)
+                for key in ("text", "output_text"):
+                    value = part.get(key)
+                    if isinstance(value, str):
+                        part[key] = redact_sensitive_text(_sanitize_surrogates(value))
+                content.append(part)
+            item["content"] = content
+        elif isinstance(raw_content, str):
+            item["content"] = redact_sensitive_text(_sanitize_surrogates(raw_content))
+        redacted_items.append(item)
+    return redacted_items
+
+
 def build_assistant_message(agent, assistant_message, finish_reason: str) -> dict:
     """Build a normalized assistant message dict from an API response message.
 
@@ -1110,6 +1140,14 @@ def build_assistant_message(agent, assistant_message, finish_reason: str) -> dic
         "reasoning": reasoning_text,
         "finish_reason": finish_reason,
     }
+
+    raw_commentary = getattr(assistant_message, "commentary", None)
+    if isinstance(raw_commentary, str) and raw_commentary.strip():
+        commentary = _sanitize_surrogates(raw_commentary)
+        commentary = agent._strip_think_blocks(commentary).strip()
+        if commentary:
+            from agent.redact import redact_sensitive_text
+            msg["commentary"] = redact_sensitive_text(commentary)
 
     raw_reasoning_content = getattr(assistant_message, "reasoning_content", None)
     if raw_reasoning_content is None and hasattr(assistant_message, "model_extra"):
@@ -1192,12 +1230,13 @@ def build_assistant_message(agent, assistant_message, finish_reason: str) -> dic
     if codex_items:
         msg["codex_reasoning_items"] = codex_items
 
-    # Codex Responses API: preserve exact assistant message items (with
-    # id/phase) so follow-up turns can replay structured items instead of
-    # flattening to plain text. This is required for prefix cache hits.
+    # Codex Responses API: preserve structured assistant message items (with
+    # id/phase) so follow-up turns can replay them instead of flattening to
+    # plain text. Text parts are copied through the configured secret redactor
+    # before persistence; ids/phases/statuses remain exact for prefix caching.
     codex_message_items = getattr(assistant_message, "codex_message_items", None)
     if codex_message_items:
-        msg["codex_message_items"] = codex_message_items
+        msg["codex_message_items"] = _redact_codex_message_items(codex_message_items)
 
     if assistant_tool_calls:
         tool_calls = []

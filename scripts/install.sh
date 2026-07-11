@@ -2913,14 +2913,17 @@ install_desktop() {
         fi
     fi
 
-    # macOS: make the locally-built (ad-hoc) app relaunchable after an in-place
-    # self-update. An ad-hoc bundle has no stable Designated Requirement, so a
-    # later in-place rebuild (new cdhash) plus the inherited quarantine flag
-    # trips Gatekeeper's tamper check ("Hermes is damaged and can't be opened").
-    # Strip quarantine + re-apply a clean deep ad-hoc signature (no
-    # hardened-runtime flag, which an ad-hoc build can't satisfy). Skipped when a
-    # real signing identity is configured so a signed build isn't clobbered.
-    if [ "$OS" = "macos" ] && [ -z "${CSC_LINK:-}" ] && [ -z "${APPLE_SIGNING_IDENTITY:-}" ] && command -v codesign >/dev/null 2>&1; then
+    # macOS: make a local self-update relaunchable. A configured stable signing
+    # identity is handled by `hermes desktop --build-only`; never overwrite that
+    # signature with an ad-hoc cdhash here.
+    local configured_signing_identity="${APPLE_SIGNING_IDENTITY:-${CSC_NAME:-}}"
+    if [ "$OS" = "macos" ] && [ -z "$configured_signing_identity" ]; then
+        local config_python="$INSTALL_DIR/venv/bin/python"
+        if [ -x "$config_python" ]; then
+            configured_signing_identity="$(PYTHONPATH="$INSTALL_DIR" "$config_python" -c 'from hermes_cli.config import load_config; value=((load_config() or {}).get("desktop") or {}).get("macos_signing_identity", ""); print(value.strip() if isinstance(value, str) else "")' 2>/dev/null || true)"
+        fi
+    fi
+    if [ "$OS" = "macos" ] && [ -z "${CSC_LINK:-}" ] && [ -z "$configured_signing_identity" ] && command -v codesign >/dev/null 2>&1; then
         xattr -cr "$app" 2>/dev/null || true
         codesign --force --deep --sign - "$app" >/dev/null 2>&1 || true
     fi

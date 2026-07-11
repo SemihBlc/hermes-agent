@@ -25,8 +25,17 @@ import "@xterm/xterm/css/xterm.css";
 import { Button } from "@nous-research/ui/ui/components/button";
 import { Typography } from "@nous-research/ui/ui/components/typography/index";
 import { cn } from "@/lib/utils";
-import { Copy, PanelRight, RotateCcw, X } from "lucide-react";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { Loader2, Paperclip, PanelRight, RotateCcw, X } from "lucide-react";
+import {
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type ChangeEvent,
+  type ClipboardEvent as ReactClipboardEvent,
+  type DragEvent as ReactDragEvent,
+} from "react";
 import { createPortal } from "react-dom";
 import { useSearchParams } from "react-router-dom";
 
@@ -54,6 +63,12 @@ import {
   transferMayContainImage,
   uploadChatImage,
 } from "@/lib/chatImagePaste";
+import {
+  isNativeBrowserPasteShortcut,
+  isTerminalCopyShortcut,
+  isTerminalPasteShortcut,
+} from "@/lib/terminal-clipboard";
+import { managedUploadRoot } from "@/lib/work-uploads";
 import { PluginSlot } from "@/plugins";
 import { useTheme } from "@/themes";
 import { useProfileScope } from "@/contexts/useProfileScope";
@@ -107,6 +122,13 @@ function generateChannelId(scope?: string): string {
 const DEFAULT_TERMINAL_BACKGROUND = "#000000";
 const DEFAULT_TERMINAL_FOREGROUND = "#f0e6d2";
 
+interface ChatUploadAttachment {
+  name: string;
+  path: string;
+  mimeType: string;
+  size: number;
+}
+
 function buildTerminalTheme(background: string, foreground: string) {
   return {
     background,
@@ -151,11 +173,76 @@ function terminalLineHeightForWidth(layoutWidthPx: number): number {
   return layoutWidthPx < 1024 ? 1.02 : 1.15;
 }
 
+function safeUploadFileName(name: string): string {
+  const basename = (name || "upload").split(/[\\/]/).pop() || "upload";
+  const cleaned = basename
+    .normalize("NFKD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .replace(/[^A-Za-z0-9._-]+/g, "-")
+    .replace(/^-+|-+$/g, "")
+    .slice(0, 120);
+  return cleaned || "upload";
+}
+
+function fallbackUploadFileName(file: File, index: number): string {
+  if (file.name) return file.name;
+  if (file.type.startsWith("image/")) {
+    const ext = file.type.split("/")[1]?.split("+")[0] || "png";
+    return `clipboard-image-${index + 1}.${ext}`;
+  }
+  return `upload-${index + 1}`;
+}
+
+function chatUploadTargetPath(file: File, index: number, sequence: number, root: string): string {
+  const day = new Date().toISOString().slice(0, 10);
+  const stamp = new Date().toISOString().replace(/[:.]/g, "-");
+  const safeName = safeUploadFileName(fallbackUploadFileName(file, index));
+  return `${root}/${day}/${stamp}-${sequence}-${index + 1}-${safeName}`;
+}
+
+function formatUploadSize(size: number): string {
+  if (size < 1024) return `${size} B`;
+  if (size < 1024 * 1024) return `${(size / 1024).toFixed(1)} KB`;
+  if (size < 1024 * 1024 * 1024) return `${(size / (1024 * 1024)).toFixed(1)} MB`;
+  return `${(size / (1024 * 1024 * 1024)).toFixed(1)} GB`;
+}
+
+function uploadPrompt(attachments: ChatUploadAttachment[]): string {
+  const intro = attachments.length === 1
+    ? "Bitte analysiere diesen Browser-Upload"
+    : "Bitte analysiere diese Browser-Uploads";
+  const files = attachments
+    .map((a, i) => {
+      const mime = a.mimeType || "unknown MIME";
+      return `${i + 1}) ${a.name} (${mime}, ${formatUploadSize(a.size)}) unter ${a.path}`;
+    })
+    .join("; ");
+  return `${intro}: ${files}. Wenn es ein Screenshot/Bild ist, nutze vision_analyze; bei PDFs/Dokumenten nutze read_file/OCR. `;
+}
+
+function transferHasFiles(event: ReactDragEvent<HTMLElement>): boolean {
+  return Array.from(event.dataTransfer.types).includes("Files");
+}
+
+function clipboardFiles(event: ReactClipboardEvent<HTMLElement>): File[] {
+  const directFiles = Array.from(event.clipboardData.files ?? []);
+  if (directFiles.length > 0) return directFiles;
+
+  return Array.from(event.clipboardData.items ?? [])
+    .filter((item) => item.kind === "file")
+    .map((item) => item.getAsFile())
+    .filter((file): file is File => file !== null);
+}
+
 export default function ChatPage({ isActive = true }: { isActive?: boolean }) {
   const hostRef = useRef<HTMLDivElement | null>(null);
   const termRef = useRef<Terminal | null>(null);
   const fitRef = useRef<FitAddon | null>(null);
   const wsRef = useRef<WebSocket | null>(null);
+  const uploadInputRef = useRef<HTMLInputElement | null>(null);
+  const uploadSequenceRef = useRef(0);
+  const uploadDragDepthRef = useRef(0);
+  const uploadNoticeTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   // Exposed to the main metrics-sync effect so it can refit the terminal
   // the moment `isActive` flips back to true (display:none → display:flex
   // collapses the host's box, so ResizeObserver never fires on return).
@@ -173,8 +260,6 @@ export default function ChatPage({ isActive = true }: { isActive?: boolean }) {
       ? "Session token unavailable. Open this page through `hermes dashboard`, not directly."
       : null,
   );
-  const [copyState, setCopyState] = useState<"idle" | "copied">("idle");
-  const copyResetRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const reconnectTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const reconnectAttemptRef = useRef(0);
   const forceFreshPtyRef = useRef(false);
@@ -202,6 +287,9 @@ export default function ChatPage({ isActive = true }: { isActive?: boolean }) {
   useEffect(() => {
     ptyStateRef.current = ptyState;
   }, [ptyState]);
+  const [uploading, setUploading] = useState(false);
+  const [uploadNotice, setUploadNotice] = useState<string | null>(null);
+  const [draggingUpload, setDraggingUpload] = useState(false);
   const clearReconnectTimer = useCallback(() => {
     if (reconnectTimerRef.current) {
       clearTimeout(reconnectTimerRef.current);
@@ -427,24 +515,148 @@ export default function ChatPage({ isActive = true }: { isActive?: boolean }) {
     return () => setEnd(null);
   }, [isActive, narrow, mobilePanelOpen, modelToolsLabel, setEnd]);
 
-  const handleCopyLast = () => {
+  const showUploadNotice = useCallback((message: string) => {
+    setUploadNotice(message);
+    if (uploadNoticeTimerRef.current) {
+      clearTimeout(uploadNoticeTimerRef.current);
+    }
+    uploadNoticeTimerRef.current = setTimeout(() => {
+      setUploadNotice(null);
+      uploadNoticeTimerRef.current = null;
+    }, 4500);
+  }, []);
+
+  const insertUploadPrompt = useCallback((text: string): boolean => {
     const ws = wsRef.current;
-    if (!ws || ws.readyState !== WebSocket.OPEN) return;
-    // Send the slash as a burst, wait long enough for Ink's tokenizer to
-    // emit a keypress event for each character (not coalesce them into a
-    // paste), then send Return as its own event.  The timing here is
-    // empirical — 100ms is safely past Node's default stdin coalescing
-    // window and well inside UI responsiveness.
-    ws.send("/copy");
-    setTimeout(() => {
-      const s = wsRef.current;
-      if (s && s.readyState === WebSocket.OPEN) s.send("\r");
-    }, 100);
-    setCopyState("copied");
-    if (copyResetRef.current) clearTimeout(copyResetRef.current);
-    copyResetRef.current = setTimeout(() => setCopyState("idle"), 1500);
+    if (!ws || ws.readyState !== WebSocket.OPEN) {
+      setBanner("Chat ist noch nicht verbunden — bitte kurz warten und den Upload erneut versuchen.");
+      return false;
+    }
+    ws.send(text);
+    termRef.current?.focus();
+    return true;
+  }, []);
+
+  const uploadFilesToChat = useCallback(
+    async (files: File[]) => {
+      if (!files.length || uploading) return;
+      const ws = wsRef.current;
+      if (!ws || ws.readyState !== WebSocket.OPEN) {
+        setBanner("Chat ist noch nicht verbunden — bitte kurz warten und den Upload erneut versuchen.");
+        return;
+      }
+
+      setUploading(true);
+      setUploadNotice(`Lade ${files.length} Datei${files.length === 1 ? "" : "en"} hoch …`);
+      const attachments: ChatUploadAttachment[] = [];
+      try {
+        const sequence = ++uploadSequenceRef.current;
+        const policy = await api.listFiles();
+        const uploadRoot = managedUploadRoot(policy.locked_root);
+        for (const [index, file] of files.entries()) {
+          const targetPath = chatUploadTargetPath(file, index, sequence, uploadRoot);
+          const result = await api.uploadFile(targetPath, file, true);
+          attachments.push({
+            name: fallbackUploadFileName(file, index),
+            path: result.path,
+            mimeType: file.type || result.entry.mime_type || "",
+            size: file.size,
+          });
+        }
+
+        const inserted = insertUploadPrompt(uploadPrompt(attachments));
+        if (inserted) {
+          showUploadNotice(
+            `${attachments.length} Upload${attachments.length === 1 ? "" : "s"} in die Eingabe eingefügt — Enter sendet.`,
+          );
+        }
+      } catch (e) {
+        const partialInserted = attachments.length > 0 && insertUploadPrompt(uploadPrompt(attachments));
+        const partial = partialInserted
+          ? ` ${attachments.length} erfolgreicher Upload${attachments.length === 1 ? " wurde" : "s wurden"} in die Eingabe eingefügt.`
+          : attachments.length > 0
+            ? ` Erfolgreiche Pfade: ${attachments.map((attachment) => attachment.path).join(", ")}`
+            : "";
+        setBanner(`Upload fehlgeschlagen: ${e}.${partial}`);
+        setUploadNotice(null);
+      } finally {
+        setUploading(false);
+      }
+    },
+    [insertUploadPrompt, showUploadNotice, uploading],
+  );
+
+  const handleUploadInputChange = (event: ChangeEvent<HTMLInputElement>) => {
+    const files = Array.from(event.target.files ?? []);
+    event.target.value = "";
+    void uploadFilesToChat(files);
+  };
+
+  const handleUploadDragEnter = (event: ReactDragEvent<HTMLDivElement>) => {
+    if (!transferHasFiles(event)) return;
+    event.preventDefault();
+    event.stopPropagation();
+    if (uploading) return;
+    uploadDragDepthRef.current += 1;
+    setDraggingUpload(true);
+  };
+
+  const handleUploadDragOver = (event: ReactDragEvent<HTMLDivElement>) => {
+    if (!transferHasFiles(event)) return;
+    event.preventDefault();
+    event.stopPropagation();
+    if (uploading) {
+      event.dataTransfer.dropEffect = "none";
+      return;
+    }
+    event.dataTransfer.dropEffect = "copy";
+  };
+
+  const handleUploadDragLeave = (event: ReactDragEvent<HTMLDivElement>) => {
+    if (!transferHasFiles(event)) return;
+    event.preventDefault();
+    event.stopPropagation();
+    uploadDragDepthRef.current = Math.max(0, uploadDragDepthRef.current - 1);
+    if (uploadDragDepthRef.current === 0) {
+      setDraggingUpload(false);
+    }
+  };
+
+  const handleUploadDrop = (event: ReactDragEvent<HTMLDivElement>) => {
+    if (!transferHasFiles(event)) return;
+    event.preventDefault();
+    event.stopPropagation();
+    uploadDragDepthRef.current = 0;
+    setDraggingUpload(false);
+    if (uploading) return;
+    void uploadFilesToChat(Array.from(event.dataTransfer.files ?? []));
+  };
+
+  const handleUploadPaste = (event: ReactClipboardEvent<HTMLDivElement>) => {
+    const files = clipboardFiles(event);
+    if (files.length) {
+      event.preventDefault();
+      event.stopPropagation();
+      void uploadFilesToChat(files);
+      return;
+    }
+
+    const text = event.clipboardData.getData("text/plain");
+    if (!text) return;
+    event.preventDefault();
+    event.stopPropagation();
+    termRef.current?.paste(text);
     termRef.current?.focus();
   };
+
+  useEffect(
+    () => () => {
+      if (uploadNoticeTimerRef.current) {
+        clearTimeout(uploadNoticeTimerRef.current);
+      }
+    },
+    [],
+  );
 
   useEffect(() => {
     const host = hostRef.current;
@@ -500,10 +712,9 @@ export default function ChatPage({ isActive = true }: { isActive?: boolean }) {
     //      browser clipboard — so the flow works just like it does in
     //      `hermes --tui`.
     //
-    //   2. **Ctrl/Cmd+Shift+C.**  Belt-and-suspenders shortcut that
-    //      operates directly on xterm's selection, useful if the TUI
-    //      ever stops listening (e.g. overlays / pickers) or if the user
-    //      has selected with the mouse outside of Ink's selection model.
+    //   2. **Ctrl/Cmd+C with a terminal selection.**  Copy selection in
+    //      browser-native fashion instead of sending SIGINT to the TUI child.
+    //      Without a selection, Ctrl+C still reaches Hermes as interrupt.
     //
     //   3. **Ctrl/Cmd+Shift+V.**  Prefers clipboard.read() for images
     //      (upload → `/image`), else readText() into term.paste().
@@ -613,16 +824,11 @@ export default function ChatPage({ isActive = true }: { isActive?: boolean }) {
     term.attachCustomKeyEventHandler((ev) => {
       if (ev.type !== "keydown") return true;
 
-      // Copy: Cmd+C on macOS, Ctrl+Shift+C on other platforms. Bare Ctrl+C
-      // is reserved for SIGINT to the TUI child — matches xterm / gnome-terminal /
-      // konsole / Windows Terminal. Ctrl+Shift+C only copies if a selection exists;
-      // without a selection it passes through to the TUI so agents can still
-      // react to the keypress.
-      // Paste: Cmd+Shift+V on macOS, Ctrl+Shift+V on others.
-      const copyModifier = isMac ? ev.metaKey : ev.ctrlKey && ev.shiftKey;
-      const pasteModifier = isMac ? ev.metaKey : ev.ctrlKey && ev.shiftKey;
-
-      if (copyModifier && ev.key.toLowerCase() === "c") {
+      // Copy: when xterm has a selection, browser-native Ctrl/Cmd+C copies it.
+      // Without a selection, Ctrl+C still passes through as SIGINT/interrupt.
+      // Paste: native browser chords (Cmd+V on macOS, Ctrl+V elsewhere),
+      // with Ctrl/Cmd+Shift+V kept as a terminal-style fallback.
+      if (isTerminalCopyShortcut(ev)) {
         const sel = term.getSelection();
         if (sel) {
           // Direct writeText inside the keydown handler preserves the user
@@ -636,11 +842,14 @@ export default function ChatPage({ isActive = true }: { isActive?: boolean }) {
           ev.preventDefault();
           return false;
         }
-        // No selection → fall through so the TUI receives Ctrl+Shift+C
-        // (or the bare ev if the user used a different modifier).
+        // No selection → fall through so Hermes can still interrupt on Ctrl+C.
       }
 
-      if (pasteModifier && ev.key.toLowerCase() === "v") {
+      if (isNativeBrowserPasteShortcut(ev, isMac)) {
+        return true;
+      }
+
+      if (isTerminalPasteShortcut(ev, isMac)) {
         // preventDefault suppresses the DOM paste event, so image paste must
         // be handled here via clipboard.read() — readText() alone misses
         // image-only clipboards (the Discord / #24860 failure mode).
@@ -1156,10 +1365,6 @@ export default function ChatPage({ isActive = true }: { isActive?: boolean }) {
       term.dispose();
       termRef.current = null;
       fitRef.current = null;
-      if (copyResetRef.current) {
-        clearTimeout(copyResetRef.current);
-        copyResetRef.current = null;
-      }
       if (reconnectTimerRef.current) {
         clearTimeout(reconnectTimerRef.current);
         reconnectTimerRef.current = null;
@@ -1274,9 +1479,6 @@ export default function ChatPage({ isActive = true }: { isActive?: boolean }) {
   //   outer flex column — sits inside the dashboard's content area
   //   row split — terminal pane (flex-1) + sidebar (fixed width, lg+)
   //   terminal wrapper — rounded, dark, padded — the "terminal window"
-  //   floating copy button — bottom-right corner, transparent with a
-  //     subtle border; stays out of the way until hovered.  Sends
-  //     `/copy\n` to Ink, which emits OSC 52 → our clipboard handler.
   //   sidebar — ChatSidebar opens its own JSON-RPC sidecar; renders
   //     model badge, tool-call list, model picker. Best-effort: if the
   //     sidecar fails to connect the terminal pane keeps working.
@@ -1381,7 +1583,13 @@ export default function ChatPage({ isActive = true }: { isActive?: boolean }) {
     );
 
   return (
-    <div className="flex min-h-0 flex-1 flex-col gap-2">
+    <div
+      className="flex min-h-0 flex-1 flex-col gap-2"
+      onDragEnter={handleUploadDragEnter}
+      onDragOver={handleUploadDragOver}
+      onDragLeave={handleUploadDragLeave}
+      onDrop={handleUploadDrop}
+    >
       <PluginSlot name="chat:top" />
       {mobileModelToolsPortal}
 
@@ -1391,16 +1599,54 @@ export default function ChatPage({ isActive = true }: { isActive?: boolean }) {
         </div>
       )}
 
+      {uploadNotice && (
+        <div className="border border-sky-500/40 bg-sky-500/10 text-sky-300 px-3 py-2 text-xs tracking-wide flex items-center gap-2">
+          {uploading && <Loader2 className="h-3 w-3 animate-spin shrink-0" />}
+          {uploadNotice}
+        </div>
+      )}
+
+      <div className="flex flex-wrap items-center gap-2 text-xs tracking-wide text-text-secondary">
+        <Button
+          ghost
+          disabled={uploading}
+          onClick={() => uploadInputRef.current?.click()}
+          title="Datei / Screenshot / PDF hochladen"
+          aria-label="Datei hochladen"
+          className={cn(
+            "normal-case tracking-normal font-normal",
+            "rounded border border-current/30 bg-black/20",
+            "px-2 py-1 text-xs sm:px-2.5 sm:py-1.5",
+            "opacity-80 hover:opacity-100 hover:border-current/60",
+            "transition-opacity duration-150",
+          )}
+        >
+          <span className="inline-flex items-center gap-1.5">
+            {uploading ? (
+              <Loader2 className="h-3 w-3 animate-spin shrink-0" />
+            ) : (
+              <Paperclip className="h-3 w-3 shrink-0" />
+            )}
+            <span>{uploading ? "lädt …" : "anhängen"}</span>
+          </span>
+        </Button>
+        <span className="text-text-secondary/80">
+          Screenshots auch per Strg/⌘+V oder Drag & Drop in die Chatfläche.
+        </span>
+      </div>
+
       <div className="flex min-h-0 flex-1 flex-col gap-2 lg:flex-row lg:gap-3">
         <div
           className={cn(
             "relative flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden rounded-lg",
             "p-2 sm:p-3",
+            draggingUpload && "ring-2 ring-sky-500/70",
           )}
           style={{
             backgroundColor: terminalBg,
             boxShadow: "0 8px 32px rgba(0, 0, 0, 0.4)",
           }}
+          onPasteCapture={handleUploadPaste}
         >
           <div
             ref={hostRef}
@@ -1428,6 +1674,13 @@ export default function ChatPage({ isActive = true }: { isActive?: boolean }) {
             </div>
           )}
 
+          {draggingUpload && (
+            <div className="pointer-events-none absolute inset-0 z-30 flex flex-col items-center justify-center gap-2 rounded-lg bg-sky-950/80">
+              <Paperclip className="h-8 w-8 text-sky-300 opacity-90" />
+              <span className="text-sm tracking-wide text-sky-200">Dateien hier ablegen</span>
+            </div>
+          )}
+
           {/* NS-504: the agent process exited (e.g. `/exit` or a new session).
               Offer an in-place restart so the user never has to refresh the
               whole page to get a working chat back. */}
@@ -1446,30 +1699,16 @@ export default function ChatPage({ isActive = true }: { isActive?: boolean }) {
             </div>
           )}
 
-          <Button
-            ghost
-            onClick={handleCopyLast}
-            title="Copy last assistant response as raw markdown"
-            aria-label="Copy last assistant response"
-            className={cn(
-              "absolute z-10",
-              "normal-case tracking-normal font-normal",
-              "rounded border border-current/30",
-              "bg-black/20",
-              "opacity-70 hover:opacity-100 hover:border-current/60",
-              "transition-opacity duration-150",
-              "bottom-2 right-2 px-2 py-1 text-xs sm:bottom-3 sm:right-3 sm:px-2.5 sm:py-1.5",
-              "lg:bottom-4 lg:right-4",
-            )}
-            style={{ color: terminalFg }}
-          >
-            <span className="inline-flex items-center gap-1.5">
-              <Copy className="h-3 w-3 shrink-0" />
-              <span className="hidden min-[400px]:inline tracking-wide">
-                {copyState === "copied" ? "copied" : "copy last response"}
-              </span>
-            </span>
-          </Button>
+          <input
+            ref={uploadInputRef}
+            type="file"
+            multiple
+            className="sr-only"
+            tabIndex={-1}
+            aria-hidden="true"
+            onChange={handleUploadInputChange}
+            accept="image/*,application/pdf,.doc,.docx,.xls,.xlsx,.csv,.txt,.md,.json,.yaml,.yml"
+          />
         </div>
 
         {!narrow && (

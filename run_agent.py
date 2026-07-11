@@ -4679,10 +4679,12 @@ class AIAgent:
         cb = getattr(self, "interim_assistant_callback", None)
         if cb is None or not isinstance(assistant_msg, dict):
             return
-        content = assistant_msg.get("content")
+        content = assistant_msg.get("commentary") or assistant_msg.get("content")
         visible = self._strip_think_blocks(content or "").strip()
         if not visible or visible == "(empty)":
             return
+        from agent.redact import redact_sensitive_text
+        visible = redact_sensitive_text(visible)
         already_streamed = self._interim_content_was_streamed(visible)
         try:
             cb(visible, already_streamed=already_streamed)

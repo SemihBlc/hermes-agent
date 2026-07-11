@@ -5421,7 +5421,7 @@ def _stop_desktop_processes_locking_build(desktop_dir: Path) -> list[int]:
     return stopped
 
 
-def _desktop_macos_relaunchable_fixup(desktop_dir: Path) -> None:
+def _desktop_macos_relaunchable_fixup(desktop_dir: Path, env: dict | None = None) -> None:
     """Make a locally-built (unsigned) macOS desktop app survive in-place self-update.
 
     An ad-hoc-signed .app has no stable Designated Requirement (no Team ID), so
@@ -5434,12 +5434,17 @@ def _desktop_macos_relaunchable_fixup(desktop_dir: Path) -> None:
     Clearing the quarantine xattrs and re-applying a clean deep ad-hoc signature
     (omitting the hardened-runtime flag, which is meaningless without a real
     Developer ID) lets the rebuilt app relaunch. No-op when a real signing
-    identity is configured (CSC_LINK / APPLE_SIGNING_IDENTITY) so a properly
+    identity is configured (CSC_LINK / CSC_NAME / APPLE_SIGNING_IDENTITY) so a properly
     signed/notarized build is never clobbered. Best-effort: never raises.
     """
     if sys.platform != "darwin":
         return
-    if os.environ.get("CSC_LINK") or os.environ.get("APPLE_SIGNING_IDENTITY"):
+    effective_env = env if env is not None else os.environ
+    if (
+        effective_env.get("CSC_LINK")
+        or effective_env.get("CSC_NAME")
+        or effective_env.get("APPLE_SIGNING_IDENTITY")
+    ):
         return
     exe = _desktop_packaged_executable(desktop_dir)
     if exe is None:
@@ -5473,12 +5478,12 @@ def _force_adhoc_macos_signing(env: dict, *, source_mode: bool) -> bool:
     Force ad-hoc signing for the local packaged rebuild instead: deterministic,
     and exactly what ``_desktop_macos_relaunchable_fixup`` already finishes off.
     No-op for source runs, off-macOS, when a real identity is configured
-    (``CSC_LINK`` / ``APPLE_SIGNING_IDENTITY``), or when the caller already
+    (``CSC_LINK`` / ``CSC_NAME`` / ``APPLE_SIGNING_IDENTITY``), or when the caller already
     pinned the flag. Mutates ``env``; returns True when it set the flag.
     """
     if sys.platform != "darwin" or source_mode:
         return False
-    if env.get("CSC_LINK") or env.get("APPLE_SIGNING_IDENTITY"):
+    if env.get("CSC_LINK") or env.get("CSC_NAME") or env.get("APPLE_SIGNING_IDENTITY"):
         return False
     if "CSC_IDENTITY_AUTO_DISCOVERY" in env:
         return False
@@ -5564,23 +5569,23 @@ def _desktop_linux_sandbox_fixup(packaged_executable: Path) -> bool:
     return True
 
 
-def _desktop_launch_options() -> tuple[list[str], str]:
+def _desktop_launch_options() -> tuple[list[str], str, str]:
     """Read `desktop.*` launch options from config.yaml.
 
-    Returns ``(electron_flags, disable_gpu)`` where ``electron_flags`` is a list
-    of extra Electron CLI flags and ``disable_gpu`` is one of "auto"/"1"/"0"
-    (normalized for the HERMES_DESKTOP_DISABLE_GPU env var the Electron app
-    reads). Best-effort: any config error yields the safe defaults
-    ``([], "auto")`` so a malformed config never blocks the launch.
+    Returns ``(electron_flags, disable_gpu, macos_signing_identity)``. The
+    identity is forwarded to electron-builder as ``CSC_NAME`` so locally signed
+    bundles retain one stable TCC identity across updates. Best-effort: any
+    config error yields safe empty/default values.
     """
     flags: list[str] = []
     disable_gpu = "auto"
+    signing_identity = ""
     try:
         from hermes_cli.config import load_config
 
         desktop_cfg = (load_config() or {}).get("desktop") or {}
     except Exception:
-        return flags, disable_gpu
+        return flags, disable_gpu, signing_identity
 
     raw_flags = desktop_cfg.get("electron_flags")
     if isinstance(raw_flags, str):
@@ -5599,7 +5604,12 @@ def _desktop_launch_options() -> tuple[list[str], str]:
             disable_gpu = "0"
         else:
             disable_gpu = "auto"
-    return flags, disable_gpu
+
+    raw_identity = desktop_cfg.get("macos_signing_identity", "")
+    if isinstance(raw_identity, str):
+        signing_identity = raw_identity.strip()
+
+    return flags, disable_gpu, signing_identity
 
 
 def cmd_gui(args: argparse.Namespace):
@@ -5634,9 +5644,12 @@ def cmd_gui(args: argparse.Namespace):
     # `desktop.disable_gpu`). The GPU policy is bridged to the env var the
     # Electron app already reads; an explicit env var still wins over config so
     # `HERMES_DESKTOP_DISABLE_GPU=... hermes desktop` keeps working.
-    config_electron_flags, config_disable_gpu = _desktop_launch_options()
+    config_electron_flags, config_disable_gpu, config_signing_identity = _desktop_launch_options()
     if config_disable_gpu != "auto" and "HERMES_DESKTOP_DISABLE_GPU" not in os.environ:
         env["HERMES_DESKTOP_DISABLE_GPU"] = config_disable_gpu
+    if config_signing_identity:
+        env.setdefault("CSC_NAME", config_signing_identity)
+        env.setdefault("APPLE_SIGNING_IDENTITY", config_signing_identity)
 
     source_mode = getattr(args, "source", False)
     skip_build = getattr(args, "skip_build", False)
@@ -5775,7 +5788,7 @@ def cmd_gui(args: argparse.Namespace):
                 # Locally-built apps are ad-hoc signed; make them relaunchable after
                 # an in-place self-update (otherwise macOS reports "Hermes is
                 # damaged"). No-op on non-macOS and on real-identity builds.
-                _desktop_macos_relaunchable_fixup(desktop_dir)
+                _desktop_macos_relaunchable_fixup(desktop_dir, env)
 
             # Build succeeded — write the stamp so next run can skip
             _write_desktop_build_stamp(PROJECT_ROOT, source_mode=source_mode)

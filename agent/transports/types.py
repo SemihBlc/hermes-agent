@@ -143,6 +143,16 @@ class NormalizedResponse:
         pd = self.provider_data or {}
         return pd.get("codex_message_items")
 
+    @property
+    def commentary(self) -> str | None:
+        pd = self.provider_data or {}
+        return pd.get("commentary")
+
+    @property
+    def deferred_text_stream(self) -> bool:
+        pd = self.provider_data or {}
+        return bool(pd.get("deferred_text_stream"))
+
 
 # ---------------------------------------------------------------------------
 # Factory helpers

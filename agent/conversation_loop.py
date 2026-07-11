@@ -4686,6 +4686,10 @@ def run_conversation(
 
                 messages.append(assistant_msg)
                 agent._emit_interim_assistant_message(assistant_msg)
+                if getattr(assistant_message, "deferred_text_stream", False):
+                    deferred_content = assistant_msg.get("content")
+                    if isinstance(deferred_content, str) and deferred_content:
+                        agent._fire_stream_delta(deferred_content)
                 try:
                     # Persist the assistant tool-call turn before any tool
                     # side effects run. If a destructive tool restarts or
@@ -5265,6 +5269,12 @@ def run_conversation(
                     final_response = None
                     continue
 
+                if final_msg.get("commentary"):
+                    agent._emit_interim_assistant_message(final_msg)
+                if getattr(assistant_message, "deferred_text_stream", False):
+                    deferred_content = final_msg.get("content")
+                    if isinstance(deferred_content, str) and deferred_content:
+                        agent._fire_stream_delta(deferred_content)
                 messages.append(final_msg)
                 
                 _turn_exit_reason = f"text_response(finish_reason={finish_reason})"

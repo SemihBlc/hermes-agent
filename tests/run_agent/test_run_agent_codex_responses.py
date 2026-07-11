@@ -1,3 +1,4 @@
+import json
 import sys
 import types
 from types import SimpleNamespace
@@ -629,7 +630,7 @@ def test_run_codex_stream_returns_collected_items_when_stream_ends_without_termi
     assert response.output == [output_item]
 
 
-def test_consume_codex_stream_routes_commentary_phase_deltas_to_reasoning(monkeypatch):
+def test_consume_codex_stream_keeps_commentary_phase_deltas_out_of_reasoning(monkeypatch):
     from agent.codex_runtime import _consume_codex_event_stream
 
     commentary_item = SimpleNamespace(
@@ -670,7 +671,7 @@ def test_consume_codex_stream_routes_commentary_phase_deltas_to_reasoning(monkey
     )
 
     assert streamed == []
-    assert reasoning_streamed == ["I’ll call the tool now."]
+    assert reasoning_streamed == []
     assert response.output == [commentary_item, function_item]
     assert response.output_text == ""
 
@@ -695,6 +696,78 @@ def test_consume_codex_stream_keeps_final_answer_phase_deltas(monkeypatch):
 
     assert streamed == ["visible answer"]
     assert response.output_text == "visible answer"
+
+
+def test_consume_codex_stream_defers_final_deltas_after_commentary(monkeypatch):
+    from agent.codex_runtime import _consume_codex_event_stream
+
+    commentary_item = SimpleNamespace(
+        type="message",
+        role="assistant",
+        phase="commentary",
+        status="completed",
+        content=[SimpleNamespace(type="output_text", text="Checking the repository.")],
+    )
+    final_item = SimpleNamespace(
+        type="message",
+        role="assistant",
+        phase="final_answer",
+        status="completed",
+        content=[SimpleNamespace(type="output_text", text="Final answer.")],
+    )
+    streamed = []
+    response = _consume_codex_event_stream(
+        _FakeCreateStream([
+            SimpleNamespace(
+                type="response.output_item.added",
+                item=SimpleNamespace(type="message", phase="commentary"),
+            ),
+            SimpleNamespace(type="response.output_text.delta", delta="Checking the repository."),
+            SimpleNamespace(type="response.output_item.done", item=commentary_item),
+            SimpleNamespace(
+                type="response.output_item.added",
+                item=SimpleNamespace(type="message", phase="final_answer"),
+            ),
+            SimpleNamespace(type="response.output_text.delta", delta="Final answer."),
+            SimpleNamespace(type="response.output_item.done", item=final_item),
+            SimpleNamespace(type="response.completed", response=SimpleNamespace(status="completed")),
+        ]),
+        model="gpt-5-codex",
+        on_text_delta=streamed.append,
+    )
+
+    assert streamed == []
+    assert response.output_text == "Final answer."
+    assert response.deferred_text_stream is True
+
+
+def test_consume_codex_stream_waits_for_done_item_when_phase_is_missing(monkeypatch):
+    from agent.codex_runtime import _consume_codex_event_stream
+
+    commentary_item = SimpleNamespace(
+        type="message",
+        role="assistant",
+        phase="commentary",
+        status="completed",
+        content=[SimpleNamespace(type="output_text", text="Private commentary")],
+    )
+    streamed = []
+    response = _consume_codex_event_stream(
+        _FakeCreateStream([
+            SimpleNamespace(
+                type="response.output_item.added",
+                item=SimpleNamespace(type="message"),
+            ),
+            SimpleNamespace(type="response.output_text.delta", delta="Private commentary"),
+            SimpleNamespace(type="response.output_item.done", item=commentary_item),
+            SimpleNamespace(type="response.completed", response=SimpleNamespace(status="completed")),
+        ]),
+        model="gpt-5-codex",
+        on_text_delta=streamed.append,
+    )
+
+    assert streamed == []
+    assert response.output_text == ""
 
 
 def test_run_codex_stream_surfaces_failed_status_in_final_response(monkeypatch):
@@ -1713,7 +1786,8 @@ def test_normalize_codex_response_marks_commentary_only_message_as_incomplete(mo
 
     assert finish_reason == "incomplete"
     assert (assistant_message.content or "") == ""
-    assert "inspect the repository" in (assistant_message.reasoning or "")
+    assert (assistant_message.reasoning or "") == ""
+    assert "inspect the repository" in (assistant_message.commentary or "")
     assert assistant_message.codex_message_items
     assert assistant_message.codex_message_items[0]["phase"] == "commentary"
     assert "inspect the repository" in assistant_message.codex_message_items[0]["content"][0]["text"]
@@ -1730,8 +1804,28 @@ def test_normalize_codex_response_does_not_fallback_to_output_text_for_commentar
 
     assert finish_reason == "incomplete"
     assert (assistant_message.content or "") == ""
-    assert "call the tool" in (assistant_message.reasoning or "")
+    assert (assistant_message.reasoning or "") == ""
+    assert "call the tool" in (assistant_message.commentary or "")
     assert assistant_message.codex_message_items[0]["phase"] == "commentary"
+
+
+def test_interim_commentary_uses_commentary_field_when_content_is_empty(monkeypatch):
+    agent = _build_agent(monkeypatch)
+    observed = {}
+    setattr(
+        agent,
+        "interim_assistant_callback",
+        lambda text, *, already_streamed=False: observed.update(
+            {"text": text, "already_streamed": already_streamed}
+        ),
+    )
+
+    agent._emit_interim_assistant_message(
+        {"role": "assistant", "content": "", "commentary": "Ich prüfe das jetzt."}
+    )
+
+    assert observed == {"text": "Ich prüfe das jetzt.", "already_streamed": False}
+
 
 def test_normalize_codex_response_final_answer_overrides_top_level_incomplete(monkeypatch):
     from agent.codex_responses_adapter import _normalize_codex_response
@@ -2070,6 +2164,39 @@ def test_stream_delta_strips_leaked_memory_context_across_chunks(monkeypatch):
     assert "</memory-context>" not in combined
 
 
+def test_build_assistant_message_redacts_codex_message_items_before_replay(monkeypatch):
+    agent = _build_agent(monkeypatch)
+    monkeypatch.setattr("agent.redact._REDACT_ENABLED", True)
+    secret = "sk-" + "A" * 48
+    raw_items = [
+        {
+            "type": "message",
+            "role": "assistant",
+            "phase": "commentary",
+            "status": "completed",
+            "content": [{"type": "output_text", "text": f"Using {secret}"}],
+        }
+    ]
+    assistant = SimpleNamespace(
+        content="",
+        commentary=f"Using {secret}",
+        reasoning=None,
+        reasoning_content=None,
+        reasoning_details=None,
+        tool_calls=[],
+        codex_reasoning_items=None,
+        codex_message_items=raw_items,
+    )
+
+    stored = agent._build_assistant_message(assistant, "incomplete")
+    from agent.codex_responses_adapter import _chat_messages_to_responses_input
+    replay = _chat_messages_to_responses_input([stored])
+
+    assert secret not in json.dumps(stored)
+    assert secret not in json.dumps(replay)
+    assert secret in raw_items[0]["content"][0]["text"]
+
+
 def test_stream_delta_scrubber_resets_between_turns(monkeypatch):
     """An unterminated span from a prior turn must not taint the next turn."""
     agent = _build_agent(monkeypatch)
@@ -2124,6 +2251,74 @@ def test_stream_delta_preserves_code_fence_newlines(monkeypatch):
     combined = "".join(observed)
     assert "```python\n" in combined
     assert combined.startswith("Here is the code:\n```python\n")
+
+
+def test_run_conversation_emits_commentary_before_deferred_final_text(monkeypatch):
+    agent = _build_agent(monkeypatch)
+    response = SimpleNamespace(
+        output=[
+            SimpleNamespace(
+                type="message",
+                role="assistant",
+                phase="commentary",
+                status="completed",
+                content=[SimpleNamespace(type="output_text", text="Checking the repository.")],
+            ),
+            SimpleNamespace(
+                type="message",
+                role="assistant",
+                phase="final_answer",
+                status="completed",
+                content=[SimpleNamespace(type="output_text", text="Final answer.")],
+            ),
+        ],
+        output_text="Final answer.",
+        status="completed",
+        model="gpt-5-codex",
+        usage=SimpleNamespace(input_tokens=4, output_tokens=4, total_tokens=8),
+        deferred_text_stream=True,
+    )
+    monkeypatch.setattr(agent, "_interruptible_api_call", lambda api_kwargs: response)
+    events = []
+    setattr(
+        agent,
+        "interim_assistant_callback",
+        lambda text, *, already_streamed=False: events.append(("commentary", text)),
+    )
+    monkeypatch.setattr(
+        agent,
+        "_fire_stream_delta",
+        lambda text: events.append(("final", text)),
+    )
+
+    result = agent.run_conversation("analyze repo")
+
+    assert result["completed"] is True
+    assert result["final_response"] == "Final answer."
+    assert events == [
+        ("commentary", "Checking the repository."),
+        ("final", "Final answer."),
+    ]
+
+
+def test_run_conversation_does_not_emit_plain_final_as_commentary(monkeypatch):
+    agent = _build_agent(monkeypatch)
+    monkeypatch.setattr(
+        agent,
+        "_interruptible_api_call",
+        lambda api_kwargs: _codex_message_response("Plain final answer."),
+    )
+    observed = []
+    setattr(
+        agent,
+        "interim_assistant_callback",
+        lambda text, *, already_streamed=False: observed.append(text),
+    )
+
+    result = agent.run_conversation("answer directly")
+
+    assert result["final_response"] == "Plain final answer."
+    assert observed == []
 
 
 def test_run_conversation_codex_continues_after_commentary_phase_message(monkeypatch):

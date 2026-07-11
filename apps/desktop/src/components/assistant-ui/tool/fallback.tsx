@@ -3,17 +3,13 @@
 import { type ToolCallMessagePartProps, useAuiState } from '@assistant-ui/react'
 import { useStore } from '@nanostores/react'
 import {
-  Children,
   createContext,
   type FC,
   type PropsWithChildren,
   type ReactNode,
-  useCallback,
   useContext,
   useEffect,
-  useMemo,
-  useRef,
-  useState
+  useMemo
 } from 'react'
 
 import { AnsiText } from '@/components/assistant-ui/ansi-text'
@@ -87,10 +83,10 @@ const TOOL_HEADER_GLYPH_WRAP_CLASS = 'grid size-3.5 shrink-0 place-items-center 
 // than a chrome heading. Used for "stdout", "stderr", "Search results", etc.
 const TOOL_SECTION_LABEL_CLASS = 'mb-1 text-[0.65rem] font-medium uppercase tracking-[0.08em] text-(--ui-text-tertiary)'
 
-// Inset scroll surface for any detail body. The expanded tool row owns the
-// border; the payload itself is just clipped raw text.
+// Keep long rows horizontally scrollable, but let the conversation own all
+// vertical scrolling.
 const TOOL_SECTION_SURFACE_CLASS =
-  'max-h-20 max-w-full overflow-auto bg-transparent px-2 py-1.5 text-(--ui-text-secondary)'
+  'max-w-full overflow-x-auto bg-transparent px-2 py-1.5 text-(--ui-text-secondary)'
 
 const TOOL_EXPANDED_SHELL_CLASS = 'rounded-[0.3125rem] border border-(--ui-stroke-tertiary)'
 
@@ -520,7 +516,7 @@ function ToolEntry({ part }: ToolEntryProps) {
                   {detailSections.body && (
                     <pre
                       className={cn(
-                        'max-h-56 overflow-auto whitespace-pre-wrap wrap-anywhere font-mono text-[0.7rem] leading-[1.55] text-destructive/90',
+                        'max-w-full overflow-x-auto whitespace-pre-wrap wrap-anywhere font-mono text-[0.7rem] leading-[1.55] text-destructive/90',
                         detailSections.summary && 'mt-1.5'
                       )}
                     >
@@ -607,59 +603,6 @@ function ToolEntry({ part }: ToolEntryProps) {
   )
 }
 
-// A back-to-back run of this many tool calls collapses into the bounded,
-// auto-scrolling window; fewer than this stays a plain inline stack.
-const TOOL_GROUP_SCROLL_THRESHOLD = 3
-
-// Pin-to-bottom + top-fade for the bounded tool window. Pins the newest row on
-// growth (a call lands or a row expands) unless the user scrolled up, and fades
-// the top edge once anything sits above it. Mirrors ThinkingDisclosure's live
-// preview. `enabled` is false for short runs, leaving the plain flat stack.
-function useToolWindow(enabled: boolean) {
-  const scrollRef = useRef<HTMLDivElement | null>(null)
-  const contentRef = useRef<HTMLDivElement | null>(null)
-  const stickRef = useRef(true)
-  const [faded, setFaded] = useState(false)
-
-  const syncFade = useCallback(() => setFaded((scrollRef.current?.scrollTop ?? 0) > 4), [])
-
-  const onScroll = useCallback(() => {
-    const el = scrollRef.current
-
-    if (!el) {
-      return
-    }
-
-    stickRef.current = el.scrollHeight - el.scrollTop - el.clientHeight <= 8
-    syncFade()
-  }, [syncFade])
-
-  useEffect(() => {
-    const el = scrollRef.current
-    const content = contentRef.current
-
-    if (!enabled || !el || !content) {
-      return
-    }
-
-    const pin = () => {
-      if (stickRef.current) {
-        el.scrollTop = el.scrollHeight
-      }
-
-      syncFade()
-    }
-
-    pin()
-    const observer = new ResizeObserver(pin)
-    observer.observe(content)
-
-    return () => observer.disconnect()
-  }, [enabled, syncFade])
-
-  return { contentRef, faded, onScroll, scrollRef }
-}
-
 /**
  * Flat, Cursor-style tool list. assistant-ui hands us a *range* of
  * consecutive tool-call parts, but how that range is sliced is unstable: a
@@ -668,13 +611,9 @@ function useToolWindow(enabled: boolean) {
  * (one big range). Rendering a "Tool actions · N steps" group off that range
  * therefore reshuffled the whole turn the instant it settled.
  *
- * So we still never *label* the group: each tool is a standalone row on the
- * tight `--tool-row-gap` rhythm. Once a run reaches `TOOL_GROUP_SCROLL_THRESHOLD`
- * rows it collapses into a fixed-height, auto-scrolling window so a long run
- * doesn't shove the reply off screen; shorter runs are byte-identical to before.
- * The DOM shape is the same either way — only classes flip — so a run that
- * crosses the threshold mid-stream never remounts a row. `ToolEmbedContext` is
- * false so every row owns its own chrome (timer / preview / copy / approval).
+ * So we never *label* or vertically bound the group: each tool is a standalone
+ * row in the normal conversation flow. `ToolEmbedContext` is false so every row
+ * owns its own chrome (timer / preview / copy / approval).
  */
 export const ToolGroupSlot: FC<PropsWithChildren<{ endIndex: number; startIndex: number }>> = ({
   children,
@@ -684,24 +623,10 @@ export const ToolGroupSlot: FC<PropsWithChildren<{ endIndex: number; startIndex:
   const messageRunning = useAuiState(selectMessageRunning)
   const enterRef = useEnterAnimation(messageRunning, `tool-group:${messageId}:${startIndex}`)
 
-  const bounded = Children.count(children) >= TOOL_GROUP_SCROLL_THRESHOLD
-  const { contentRef, faded, onScroll, scrollRef } = useToolWindow(bounded)
-
   return (
     <ToolEmbedContext.Provider value={false}>
       <div className="min-w-0 max-w-full overflow-hidden" data-slot="tool-block" data-tool-group="" ref={enterRef}>
-        <div
-          className={cn(
-            bounded && 'tool-group-scroll max-h-(--tool-group-scroll-max-h) overflow-y-auto',
-            bounded && faded && 'tool-group-scroll--faded'
-          )}
-          onScroll={bounded ? onScroll : undefined}
-          ref={scrollRef}
-        >
-          <div className="grid min-w-0 max-w-full gap-(--tool-row-gap)" ref={contentRef}>
-            {children}
-          </div>
-        </div>
+        <div className="grid min-w-0 max-w-full gap-(--tool-row-gap)">{children}</div>
       </div>
     </ToolEmbedContext.Provider>
   )

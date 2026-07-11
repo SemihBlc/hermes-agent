@@ -9,6 +9,7 @@ import { ActivityTimerText } from '@/components/chat/activity-timer-text'
 import { DisclosureRow } from '@/components/chat/disclosure-row'
 import { GeneratedImage } from '@/components/chat/generated-image-result'
 import { useI18n } from '@/i18n'
+import { formatThinkingMarkdown } from '@/lib/chat-runtime'
 import { useEnterAnimation } from '@/lib/use-enter-animation'
 import { cn } from '@/lib/utils'
 
@@ -175,7 +176,7 @@ const ReasoningAccordionGroup: FC<{ children?: ReactNode; endIndex: number; star
 }
 
 const ReasoningTextPart: FC<{ text: string; status?: { type: string } }> = ({ text, status }) => {
-  const displayText = text.trimStart()
+  const displayText = formatThinkingMarkdown(text.trimStart())
   const messageRunning = useAuiState(s => s.message.status?.type === 'running')
   const isRunning = status?.type === 'running' || messageRunning
 

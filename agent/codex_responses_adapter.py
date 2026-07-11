@@ -1150,6 +1150,7 @@ def _normalize_codex_response(
 
     content_parts: List[str] = []
     reasoning_parts: List[str] = []
+    commentary_parts: List[str] = []
     reasoning_items_raw: List[Dict[str, Any]] = []
     message_items_raw: List[Dict[str, Any]] = []
     tool_calls: List[Any] = []
@@ -1219,11 +1220,12 @@ def _normalize_codex_response(
                 # (Codex CLI excludes it from last-message extraction; issues
                 # #24933 / #41293).  Keep it out of assistant content so it
                 # can't be concatenated into — or leak as — the final response,
-                # but surface it through the reasoning channel so the CLI/
-                # gateway display it like thinking text.  The exact message
-                # item is still preserved below for replay/cache continuity.
+                # Preserve it as commentary so clients can show progress
+                # outside both the final answer and the reasoning disclosure.
+                # The exact message item is still preserved below for
+                # replay/cache continuity.
                 if is_commentary_phase:
-                    reasoning_parts.append(message_text)
+                    commentary_parts.append(message_text)
                 else:
                     content_parts.append(message_text)
                 raw_message_item: Dict[str, Any] = {
@@ -1364,10 +1366,12 @@ def _normalize_codex_response(
         content=final_text,
         tool_calls=tool_calls,
         reasoning="\n\n".join(reasoning_parts).strip() if reasoning_parts else None,
+        commentary="\n\n".join(commentary_parts).strip() if commentary_parts else None,
         reasoning_content=None,
         reasoning_details=None,
         codex_reasoning_items=reasoning_items_raw or None,
         codex_message_items=message_items_raw or None,
+        deferred_text_stream=bool(getattr(response, "deferred_text_stream", False)),
     )
 
     if tool_calls:

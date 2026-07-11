@@ -3281,6 +3281,9 @@ DEFAULT_CONFIG = {
         #   false   - always keep GPU acceleration on, even over a remote display.
         # Bridged to the HERMES_DESKTOP_DISABLE_GPU env var the Electron app reads.
         "disable_gpu": "auto",
+        # Optional persistent macOS code-signing identity for local desktop
+        # rebuilds. Keeps TCC permissions stable across self-updates.
+        "macos_signing_identity": "",
     },
 
 
