@@ -53,6 +53,14 @@ interface QueuedStreamDeltas {
   reasoning: string
 }
 
+let liveStreamCounter = 0
+
+function nextLiveStreamId(): string {
+  liveStreamCounter += 1
+
+  return `assistant-stream-${Date.now()}-${liveStreamCounter}`
+}
+
 export function useMessageStream({
   activeSessionIdRef,
   hydrateFromStoredSession,
@@ -88,7 +96,7 @@ export function useMessageStream({
             return state
           }
 
-          const streamId = state.streamId ?? `assistant-stream-${Date.now()}`
+          const streamId = state.streamId ?? nextLiveStreamId()
           const groupId = state.pendingBranchGroup ?? undefined
           const prev = state.messages
           let nextMessages: ChatMessage[]
