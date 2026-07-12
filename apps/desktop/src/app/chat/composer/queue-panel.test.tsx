@@ -35,8 +35,6 @@ describe('QueuePanel autoscroll', () => {
     const before = [entry('1'), entry('2'), entry('3')]
     const { rerender } = render(panel(before))
 
-    fireEvent.click(screen.getByRole('button', { name: '3 Queued' }))
-
     const queueViewport = screen.getByRole('region', { name: '3 Queued' })
     const outer = screen.getByTestId('outer-scroll-container')
     Object.defineProperty(queueViewport, 'scrollHeight', { configurable: true, value: 640 })
@@ -57,6 +55,8 @@ describe('QueuePanel autoscroll', () => {
     const outer = screen.getByTestId('outer-scroll-container')
     outer.scrollTop = 41
 
+    fireEvent.click(screen.getByRole('button', { name: '3 Queued' }))
+
     rerender(panel([...before, entry('4')]))
 
     expect(screen.queryByRole('region', { name: '4 Queued' })).toBeNull()
@@ -75,8 +75,6 @@ describe('QueuePanel autoscroll', () => {
   it('preserves the queue scroll position when the last entry is removed', () => {
     const before = [entry('1'), entry('2'), entry('3'), entry('4')]
     const { rerender } = render(panel(before))
-
-    fireEvent.click(screen.getByRole('button', { name: '4 Queued' }))
 
     const queueViewport = screen.getByRole('region', { name: '4 Queued' })
     const outer = screen.getByTestId('outer-scroll-container')
@@ -98,7 +96,6 @@ describe('QueuePanel autoscroll', () => {
     const outer = screen.getByTestId('outer-scroll-container')
 
     fireEvent.click(screen.getByRole('button', { name: '3 Queued' }))
-    fireEvent.click(screen.getByRole('button', { name: '3 Queued' }))
     outer.scrollTop = 47
     fireEvent.click(screen.getByRole('button', { name: '3 Queued' }))
 
@@ -116,6 +113,7 @@ describe('QueuePanel autoscroll', () => {
     const four = entry('4')
     const { rerender } = render(panel([one, two, three]))
 
+    fireEvent.click(screen.getByRole('button', { name: '3 Queued' }))
     rerender(panel([one, two, three, four]))
     rerender(panel([one, two, four]))
     fireEvent.click(screen.getByRole('button', { name: '3 Queued' }))
@@ -129,8 +127,6 @@ describe('QueuePanel autoscroll', () => {
     const three = entry('3')
     const { rerender } = render(panel([one, two, three]))
 
-    fireEvent.click(screen.getByRole('button', { name: '3 Queued' }))
-
     const queueViewport = screen.getByRole('region', { name: '3 Queued' })
     Object.defineProperty(queueViewport, 'scrollHeight', { configurable: true, value: 880 })
     queueViewport.scrollTop = 19
@@ -143,8 +139,6 @@ describe('QueuePanel autoscroll', () => {
   it('does not treat a prepend as an append', () => {
     const before = [entry('1'), entry('2'), entry('3')]
     const { rerender } = render(panel(before))
-
-    fireEvent.click(screen.getByRole('button', { name: '3 Queued' }))
 
     const queueViewport = screen.getByRole('region', { name: '3 Queued' })
     Object.defineProperty(queueViewport, 'scrollHeight', { configurable: true, value: 900 })
