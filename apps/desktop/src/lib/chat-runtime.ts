@@ -133,6 +133,61 @@ export function coerceThinkingText(value: unknown): string {
   return EMPTY_THINKING_PLACEHOLDER_RE.test(raw) ? '' : raw
 }
 
+function formatThinkingProse(text: string): string {
+  return text
+    .replace(/(\*\*[^*\n]+?\*\*)\s*<!--\s*-->\s*(?=\*\*)/g, '$1\n\n')
+    .replace(/\*\*\s*\*\*(?=[^\s*])/g, '**\n\n**')
+    .replace(/(\*\*[^*\n]+?\*\*)(?=[\p{L}\p{N}])/gu, '$1\n\n')
+}
+
+/** Keep provider planning beats readable without changing literal code. */
+export function formatThinkingMarkdown(text: string): string {
+  let result = ''
+  let proseStart = 0
+  let cursor = 0
+
+  while (cursor < text.length) {
+    const marker = text[cursor]
+
+    if (marker !== '`' && marker !== '~') {
+      cursor += 1
+
+      continue
+    }
+
+    let runEnd = cursor + 1
+
+    while (text[runEnd] === marker) {
+      runEnd += 1
+    }
+
+    const runLength = runEnd - cursor
+
+    if (marker === '~' && runLength < 3) {
+      cursor = runEnd
+
+      continue
+    }
+
+    const delimiter = marker.repeat(runLength)
+    const close = text.indexOf(delimiter, runEnd)
+
+    if (close < 0) {
+      result += formatThinkingProse(text.slice(proseStart, cursor)) + text.slice(cursor)
+
+      return result
+    }
+
+    result += formatThinkingProse(text.slice(proseStart, cursor))
+    const codeEnd = close + runLength
+    result += text.slice(cursor, codeEnd)
+    cursor = codeEnd
+    proseStart = codeEnd
+  }
+
+  return result + formatThinkingProse(text.slice(proseStart))
+}
+
 export function isImageGenerationTool(name?: string): boolean {
   return name === 'image_generate'
 }

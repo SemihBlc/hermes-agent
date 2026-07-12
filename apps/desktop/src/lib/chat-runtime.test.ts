@@ -5,6 +5,7 @@ import type { ComposerAttachment } from '@/store/composer'
 import {
   attachmentDisplayText,
   coerceThinkingText,
+  formatThinkingMarkdown,
   optimisticAttachmentRef,
   parseCommandDispatch,
   parseSlashCommand
@@ -82,6 +83,55 @@ describe('coerceThinkingText', () => {
         "◉_◉ processing... I don't see any current rewritten thinking or next thinking to process. Could you provide the thinking content you'd like me to rewrite?"
       )
     ).toBe('')
+  })
+})
+
+describe('formatThinkingMarkdown', () => {
+  it('separates adjacent bold planning beats into readable paragraphs', () => {
+    expect(formatThinkingMarkdown('**Inspecting files****Planning changes****Running tests**')).toBe(
+      '**Inspecting files**\n\n**Planning changes**\n\n**Running tests**'
+    )
+  })
+
+  it('separates a bold planning beat from prose streamed without whitespace', () => {
+    expect(formatThinkingMarkdown('**Verifying the setting**Die sinnvollste Lösung ist macOS selbst.')).toBe(
+      '**Verifying the setting**\n\nDie sinnvollste Lösung ist macOS selbst.'
+    )
+  })
+
+  it('removes Codex HTML separators between completed reasoning summaries', () => {
+    expect(formatThinkingMarkdown('**Inspecting files**\n\n<!-- -->\n**Running tests**')).toBe(
+      '**Inspecting files**\n\n**Running tests**'
+    )
+  })
+
+  it('leaves ordinary inline emphasis untouched', () => {
+    expect(formatThinkingMarkdown('Use **fast mode** for this run.')).toBe('Use **fast mode** for this run.')
+    expect(formatThinkingMarkdown('Use **macOS selbst**: Das ist robuster.')).toBe(
+      'Use **macOS selbst**: Das ist robuster.'
+    )
+  })
+
+  it('never rewrites inline or fenced code literals', () => {
+    const literal = [
+      'Vorher `<!-- --> **alpha****beta**` nachher.',
+      '',
+      '```html',
+      '<!-- -->',
+      '**alpha****beta**',
+      '```',
+      '',
+      '~~~md',
+      '**gamma****delta**',
+      '~~~'
+    ].join('\n')
+
+    expect(formatThinkingMarkdown(literal)).toBe(literal)
+  })
+
+  it('separates planning beats before Unicode prose', () => {
+    expect(formatThinkingMarkdown('**Проверка**Следующий шаг')).toBe('**Проверка**\n\nСледующий шаг')
+    expect(formatThinkingMarkdown('**確認**次の手順')).toBe('**確認**\n\n次の手順')
   })
 })
 
