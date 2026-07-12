@@ -8,6 +8,7 @@ import {
   countDiffLineStats,
   inlineDiffFromResult,
   MAX_TOOL_RENDER_CHARS,
+  stripLeadingAction,
   type ToolPart
 } from './fallback-model'
 
@@ -148,6 +149,72 @@ describe('buildToolView file edit diffs', () => {
 })
 
 describe('buildToolView title actions', () => {
+  it('strips case-insensitive Unicode actions by the original matched length', () => {
+    expect(stripLeadingAction('İSTANBUL target', ['İstanbul'])).toBe('target')
+  })
+
+  it('falls back to real arguments when inherited context only names the action', () => {
+    const read = buildToolView(
+      part({ args: { context: 'Reading', path: './banner.py' }, result: undefined, toolName: 'read_file' }),
+      ''
+    )
+
+    const terminal = buildToolView(
+      part({
+        args: { command: 'npm test', context: 'Running' },
+        result: { exit_code: 0, output: 'ok' },
+        toolName: 'terminal'
+      }),
+      ''
+    )
+
+    const code = buildToolView(
+      part({
+        args: { code: 'print("ok")', context: 'Running code' },
+        result: { exit_code: 0, output: 'ok' },
+        toolName: 'execute_code'
+      }),
+      ''
+    )
+
+    expect(read.title).toBe('Reading banner.py')
+    expect(terminal.title).toBe('Ran npm test')
+    expect(code.title).toBe('Ran code print("ok")')
+  })
+
+  it('does not duplicate action verbs inherited from backend context', () => {
+    const read = buildToolView(
+      part({
+        args: { context: 'Reading banner.py L170-299', path: './banner.py' },
+        result: undefined,
+        toolName: 'read_file'
+      }),
+      ''
+    )
+
+    const terminal = buildToolView(
+      part({
+        args: { command: 'npm test', context: 'Running npm test' },
+        result: { exit_code: 0, output: 'ok' },
+        toolName: 'terminal'
+      }),
+      ''
+    )
+
+    const code = buildToolView(
+      part({
+        args: { code: 'print("ok")', context: 'Running code print("ok")' },
+        result: { exit_code: 0, output: 'ok' },
+        toolName: 'execute_code'
+      }),
+      ''
+    )
+
+    expect(read.title).toBe('Reading banner.py L170-299')
+    expect(terminal.title).toBe('Ran npm test')
+    expect(code.title).toBe('Ran code print("ok")')
+  })
+
   it('marks the pending action separately from the rest of the title', () => {
     const read = buildToolView(part({ args: { path: '/tmp/demo.txt' }, result: undefined, toolName: 'read_file' }), '')
 
