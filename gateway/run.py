@@ -17096,6 +17096,30 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
         )
         # Tool progress grouping: "accumulate" (edit one bubble) or "separate" (one msg per tool)
         progress_grouping = resolve_display_setting(user_config, platform_key, "tool_progress_grouping") or "accumulate"
+        try:
+            _tool_progress_line_length = int(
+                resolve_display_setting(user_config, platform_key, "tool_progress_line_length", 0) or 0
+            )
+        except (TypeError, ValueError):
+            _tool_progress_line_length = 0
+        _tool_progress_compact_labels = bool(
+            resolve_display_setting(user_config, platform_key, "tool_progress_compact_labels", False)
+        )
+        _compact_progress_labels = {
+            "browser_click": "Click",
+            "browser_navigate": "Open",
+            "browser_type": "Type",
+            "execute_code": "Script",
+            "memory": "Memory",
+            "patch": "Edit",
+            "read_file": "Read",
+            "search_files": "Files",
+            "terminal": "Run",
+            "vision_analyze": "Image",
+            "web_extract": "Fetch",
+            "web_search": "Web",
+            "write_file": "Write",
+        }
         from gateway.status_phrases import choose_status_phrase, resolve_status_phrase_catalog
         _generic_status_recent: List[str] = []
         _generic_status_catalog = resolve_status_phrase_catalog(user_config, platform_key)
@@ -17173,7 +17197,7 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
         # Queue for progress messages (thread-safe)
         progress_queue = queue.Queue() if needs_progress_queue else None
         last_tool = [None]  # Mutable container for tracking in closure
-        last_progress_msg = [None]  # Track last message for dedup
+        last_progress_msg: list[str | None] = [None]  # Track last message for dedup
         repeat_count = [0]  # How many times the same message repeated
         # True when the previously enqueued progress line was a terminal
         # fenced code block — consecutive terminal calls then drop the
@@ -17348,6 +17372,17 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
             # at ``tool_preview_length`` (default 40) so a long or multi-line
             # command doesn't render as a huge block — matching the budget the
             # non-terminal preview path already applies (#42634).
+            try:
+                _terminal_progress_code_blocks = bool(
+                    resolve_display_setting(
+                        user_config,
+                        platform_key,
+                        "tool_progress_code_blocks",
+                        True,
+                    )
+                )
+            except Exception:
+                _terminal_progress_code_blocks = True
             _code_block_full = None
             _code_block_short = None
             try:
@@ -17355,7 +17390,8 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
             except Exception:
                 _progress_adapter = None
             if (
-                getattr(_progress_adapter, "supports_code_blocks", False)
+                _terminal_progress_code_blocks
+                and getattr(_progress_adapter, "supports_code_blocks", False)
                 and tool_name == "terminal"
                 and isinstance(args, dict)
                 and isinstance(args.get("command"), str)
@@ -17430,29 +17466,46 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
                 # onto the preview the callback already computed (so the
                 # command/url/query is preserved).  Custom/plugin/MCP tools
                 # have no verb and fall back to the raw "tool_name: ..." form.
-                _verb = get_tool_verb(tool_name)
-                if _verb:
-                    if verb_drops_preview(tool_name):
-                        msg = f"{emoji} {_verb}"
-                    else:
-                        msg = f"{emoji} {_verb}{tool_verb_connector(tool_name)}{preview}"
+                _compact_label = (
+                    _compact_progress_labels.get(tool_name)
+                    if _tool_progress_compact_labels and tool_name != "skill_view"
+                    else None
+                )
+                if _compact_label:
+                    msg = f"{emoji} {_compact_label} · {preview}"
                 else:
-                    msg = f"{emoji} {tool_name}: \"{preview}\""
+                    _verb = get_tool_verb(tool_name)
+                    if _verb:
+                        if verb_drops_preview(tool_name):
+                            msg = f"{emoji} {_verb}"
+                        else:
+                            msg = f"{emoji} {_verb}{tool_verb_connector(tool_name)}{preview}"
+                    else:
+                        msg = f"{emoji} {tool_name}: \"{preview}\""
                 last_was_terminal_block[0] = False
             else:
                 msg = f"{emoji} {tool_name}..."
                 last_was_terminal_block[0] = False
             
-            # Dedup: collapse consecutive identical progress messages.
-            # Common with execute_code where models iterate with the same
-            # code (same boilerplate imports → identical previews).
-            if msg == last_progress_msg[0]:
+            # Telegram and similarly narrow surfaces can cap the complete
+            # rendered row, not just the argument preview. Skill names remain
+            # whole because they are durable, user-meaningful identifiers.
+            _dedup_key = msg
+            if _tool_progress_line_length > 0 and tool_name != "skill_view":
+                msg = " ".join(msg.split())
+                if len(msg) > _tool_progress_line_length:
+                    msg = msg[: _tool_progress_line_length - 3].rstrip() + "..."
+
+            # Dedup: collapse consecutive identical progress messages. Keep the
+            # untruncated text as the identity so distinct long calls that share
+            # a visible prefix are never merged accidentally.
+            if _dedup_key == last_progress_msg[0]:
                 repeat_count[0] += 1
                 # Update the last line in progress_lines with a counter
                 # via a special "dedup" queue message.
                 progress_queue.put(("__dedup__", msg, repeat_count[0]))
                 return
-            last_progress_msg[0] = msg
+            last_progress_msg[0] = _dedup_key
             repeat_count[0] = 0
             
             progress_queue.put(msg)

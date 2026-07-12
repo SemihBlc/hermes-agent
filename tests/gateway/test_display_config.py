@@ -208,6 +208,19 @@ class TestYAMLNormalisation:
         config = {"display": {"platforms": {"telegram": {"show_reasoning": "true"}}}}
         assert resolve_display_setting(config, "telegram", "show_reasoning") is True
 
+    def test_tool_progress_code_blocks_string_false(self):
+        """String false must not become a truthy code-block preference."""
+        from gateway.display_config import resolve_display_setting
+
+        config = {
+            "display": {
+                "platforms": {
+                    "telegram": {"tool_progress_code_blocks": "false"},
+                }
+            }
+        }
+        assert resolve_display_setting(config, "telegram", "tool_progress_code_blocks") is False
+
     def test_tool_preview_length_string(self):
         """String numbers are normalised to int."""
         from gateway.display_config import resolve_display_setting
