@@ -215,6 +215,39 @@ describe('buildToolView title actions', () => {
     expect(code.title).toBe('Ran code print("ok")')
   })
 
+  it('preserves real values that begin with action-like words', () => {
+    const read = buildToolView(
+      part({
+        args: { context: 'Reading list.txt', path: './Reading list.txt' },
+        result: { content: '1|first item' },
+        toolName: 'read_file'
+      }),
+      ''
+    )
+
+    const terminal = buildToolView(
+      part({
+        args: { command: 'Running npm test', context: 'Running npm test' },
+        result: { exit_code: 0, output: 'ok' },
+        toolName: 'terminal'
+      }),
+      ''
+    )
+
+    const code = buildToolView(
+      part({
+        args: { code: 'Running code example', context: 'Running code example' },
+        result: { exit_code: 0, output: 'ok' },
+        toolName: 'execute_code'
+      }),
+      ''
+    )
+
+    expect(read.title).toBe('Read Reading list.txt')
+    expect(terminal.title).toBe('Ran Running npm test')
+    expect(code.title).toBe('Ran code Running code example')
+  })
+
   it('marks the pending action separately from the rest of the title', () => {
     const read = buildToolView(part({ args: { path: '/tmp/demo.txt' }, result: undefined, toolName: 'read_file' }), '')
 
@@ -305,6 +338,27 @@ describe('buildToolView title actions', () => {
     expect(view.titleAction).toEqual({ prefix: '', text: 'Reading', suffix: ' package.json L1-5' })
   })
 
+  it('shows the skill name directly on skill_view rows', () => {
+    const done = buildToolView(part({ args: { name: 'systematic-debugging' }, result: {}, toolName: 'skill_view' }), '')
+
+    const pending = buildToolView(
+      part({
+        args: { file_path: 'references/live-health.md', name: 'hermes-agent' },
+        result: undefined,
+        toolName: 'skill_view'
+      }),
+      ''
+    )
+
+    expect(done.title).toBe('Skill: systematic-debugging')
+    expect(pending.title).toBe('Loading skill: hermes-agent / references/live-health.md')
+    expect(pending.titleAction).toEqual({
+      prefix: '',
+      text: 'Loading skill',
+      suffix: ': hermes-agent / references/live-health.md'
+    })
+  })
+
   it('uses returned line numbers for negative-offset read_file rows', () => {
     const view = buildToolView(
       part({
@@ -384,10 +438,17 @@ describe('buildToolView title actions', () => {
       ''
     )
 
+    const terminal = buildToolView(
+      part({ args: { command: 'npm test', context: 'Running npm test' }, result: undefined, toolName: 'terminal' }),
+      ''
+    )
+
     expect(read.title).toBe('demo.txt を読み取り中')
     expect(read.titleAction).toEqual({ prefix: 'demo.txt を', text: '読み取り中', suffix: '' })
     expect(web.title).toBe('example.com/docs を読み取り中')
     expect(web.titleAction).toEqual({ prefix: 'example.com/docs を', text: '読み取り中', suffix: '' })
+    expect(terminal.title).toBe('実行中 npm test')
+    expect(terminal.titleAction).toEqual({ prefix: '', text: '実行中', suffix: ' npm test' })
   })
 })
 
