@@ -10,10 +10,9 @@
 // platform/arch during multi-arch builds.
 
 import { createRequire } from 'node:module'
-import { execFileSync } from 'node:child_process'
 import { fileURLToPath } from 'node:url'
 import { dirname, resolve, join } from 'node:path'
-import { accessSync, chmodSync, constants, cpSync, existsSync, mkdirSync, readdirSync, rmSync } from 'node:fs'
+import { chmodSync, cpSync, existsSync, mkdirSync, readdirSync, rmSync } from 'node:fs'
 import { isMain } from './utils.mjs'
 
 const here = dirname(fileURLToPath(import.meta.url))
@@ -51,46 +50,6 @@ export function copySpawnHelper(src, dest, platform = process.platform) {
   if (platform !== 'win32') chmodSync(dest, 0o755)
 }
 
-function isExecutable(path) {
-  try {
-    accessSync(path, constants.X_OK)
-    return true
-  } catch {
-    return false
-  }
-}
-
-function resolveElectronRebuildCommand() {
-  const candidates = [
-    resolve(projectRoot, 'node_modules/.bin/electron-rebuild'),
-    resolve(projectRoot, '../../node_modules/.bin/electron-rebuild')
-  ]
-  const command = candidates.find(existsSync)
-  if (!command) {
-    throw new Error(`electron-rebuild not found; checked: ${candidates.join(', ')}`)
-  }
-  return command
-}
-
-export function ensureDarwinNodePtyBuild({ platform, arch, srcRoot, rebuildCommand, run = execFileSync }) {
-  if (platform !== 'darwin') return false
-
-  const releaseDir = join(srcRoot, 'build/Release')
-  const nativeAddon = join(releaseDir, 'pty.node')
-  const spawnHelper = join(releaseDir, 'spawn-helper')
-
-  const command = rebuildCommand || resolveElectronRebuildCommand()
-  run(command, ['-f', '-w', 'node-pty', '--arch', arch], {
-    cwd: projectRoot,
-    stdio: 'inherit'
-  })
-
-  if (!existsSync(nativeAddon) || !isExecutable(spawnHelper)) {
-    throw new Error(`electron-rebuild did not produce a runnable Darwin node-pty payload in ${releaseDir}`)
-  }
-  return true
-}
-
 /**
  * Copies the locally-compiled build/Release output (used when no prebuild
  * was available and node-pty was built from source for the host machine).
@@ -124,8 +83,6 @@ function copyBuildRelease(srcDir, destDir, platform) {
 export function stageNodePty({ platform = process.platform, arch = process.arch } = {}) {
   const srcRoot = resolveNodePtyRoot()
   const destRoot = resolve(projectRoot, 'dist/node_modules/node-pty')
-
-  ensureDarwinNodePtyBuild({ platform, arch, srcRoot })
 
   rmSync(destRoot, { recursive: true, force: true })
   mkdirSync(destRoot, { recursive: true })
