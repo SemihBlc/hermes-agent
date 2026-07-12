@@ -111,8 +111,12 @@ function readFileLineLabel(args: Record<string, unknown>, result: Record<string,
   return start === end ? `L${start}` : `L${start}-${end}`
 }
 
-function readFileDisplayTarget(args: Record<string, unknown>, result: Record<string, unknown>): string {
-  const inherited = firstStringField(args, ['context', 'preview'])
+function readFileDisplayTarget(
+  args: Record<string, unknown>,
+  result: Record<string, unknown>,
+  includeInherited = true
+): string {
+  const inherited = includeInherited ? firstStringField(args, ['context', 'preview']) : ''
 
   if (inherited) {
     return inherited
@@ -581,6 +585,19 @@ function firstStringField(record: Record<string, unknown>, keys: readonly string
   }
 
   return ''
+}
+
+export function stripLeadingAction(value: string, actions: readonly string[]): string {
+  for (const action of actions) {
+    const escaped = action.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+    const match = value.match(new RegExp(`^${escaped}(?:\\s+|$)`, 'iu'))
+
+    if (match) {
+      return value.slice(match[0].length).trimStart()
+    }
+  }
+
+  return value
 }
 
 function collectResultItems(value: unknown): unknown[] {
@@ -1307,8 +1324,15 @@ function dynamicTitle(
   }
 
   if (part.toolName === 'read_file') {
-    const target = readFileDisplayTarget(args, result)
-    const action = verb(translateNow('assistant.tool.actions.reading'), translateNow('assistant.tool.actions.read'))
+    const readingAction = translateNow('assistant.tool.actions.reading')
+    const readAction = translateNow('assistant.tool.actions.read')
+    const inheritedTarget = firstStringField(args, ['context', 'preview'])
+
+    const target =
+      stripLeadingAction(inheritedTarget, [readingAction, readAction, 'Reading', 'Read']) ||
+      readFileDisplayTarget(args, result, false)
+
+    const action = verb(readingAction, readAction)
 
     return target
       ? titledAction(action, translateNow('assistant.tool.titleTemplates.actionTarget', action, target))
@@ -1316,16 +1340,30 @@ function dynamicTitle(
   }
 
   if (part.toolName === 'terminal' || part.toolName === 'execute_code') {
+    const runningAction =
+      part.toolName === 'execute_code'
+        ? translateNow('assistant.tool.actions.runningCode')
+        : translateNow('assistant.tool.actions.running')
+
+    const ranAction =
+      part.toolName === 'execute_code'
+        ? translateNow('assistant.tool.actions.ranCode')
+        : translateNow('assistant.tool.actions.ran')
+
+    const inheritedCommand = firstStringField(args, ['context', 'preview'])
+
     const command =
-      firstStringField(args, ['context', 'preview']) ||
+      stripLeadingAction(
+        inheritedCommand,
+        part.toolName === 'execute_code'
+          ? [runningAction, ranAction, 'Running code', 'Ran code']
+          : [runningAction, ranAction, 'Running', 'Ran']
+      ) ||
       firstStringField(args, ['command', 'code']) ||
       contextValue(args)
 
     if (command) {
-      const action =
-        part.toolName === 'execute_code'
-          ? verb(translateNow('assistant.tool.actions.runningCode'), translateNow('assistant.tool.actions.ranCode'))
-          : verb(translateNow('assistant.tool.actions.running'), translateNow('assistant.tool.actions.ran'))
+      const action = verb(runningAction, ranAction)
 
       return titledAction(
         action,
