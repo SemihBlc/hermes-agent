@@ -1,3 +1,5 @@
+import { useLayoutEffect, useRef } from 'react'
+
 import { StatusRow } from '@/components/chat/status-row'
 import { StatusSection } from '@/components/chat/status-section'
 import { Button } from '@/components/ui/button'
@@ -23,6 +25,16 @@ const entryPreview = (entry: QueuedPromptEntry, c: Translations['composer']) =>
 export function QueuePanel({ busy, editingId, entries, onDelete, onEdit, onSendNow }: QueuePanelProps) {
   const { t } = useI18n()
   const c = t.composer
+  const scrollRef = useRef<HTMLDivElement | null>(null)
+  const newestEntryId = entries.at(-1)?.id
+
+  useLayoutEffect(() => {
+    const viewport = scrollRef.current
+
+    if (viewport) {
+      viewport.scrollTop = viewport.scrollHeight
+    }
+  }, [newestEntryId])
 
   if (entries.length === 0) {
     return null
@@ -33,19 +45,25 @@ export function QueuePanel({ busy, editingId, entries, onDelete, onEdit, onSendN
       icon={<Codicon className="text-muted-foreground/70" name="layers" size="0.8rem" />}
       label={c.queued(entries.length)}
     >
-      {entries.map(entry => {
-        const isEditing = editingId === entry.id
-        const attachmentsCount = entry.attachments.length
+      <div
+        aria-label={c.queued(entries.length)}
+        className="max-h-40 overflow-y-auto overscroll-contain"
+        ref={scrollRef}
+        role="region"
+      >
+        {entries.map(entry => {
+          const isEditing = editingId === entry.id
+          const attachmentsCount = entry.attachments.length
 
-        return (
-          <StatusRow
-            className={cn(
-              'border border-transparent',
-              isEditing && 'border-[color-mix(in_srgb,var(--dt-composer-ring)_40%,transparent)] bg-accent/25'
-            )}
-            key={entry.id}
-            trailing={
-              <>
+          return (
+            <StatusRow
+              className={cn(
+                'border border-transparent',
+                isEditing && 'border-[color-mix(in_srgb,var(--dt-composer-ring)_40%,transparent)] bg-accent/25'
+              )}
+              key={entry.id}
+              trailing={
+                <>
                 <Tip label={c.queueEdit}>
                   <Button
                     aria-label={c.queueEdit}
@@ -84,26 +102,27 @@ export function QueuePanel({ busy, editingId, entries, onDelete, onEdit, onSendN
                     <Trash2 className={iconSize.xs} />
                   </Button>
                 </Tip>
-              </>
-            }
-            trailingVisible={isEditing}
-          >
-            <div className="min-w-0 flex-1">
-              <p className="truncate text-[0.73rem] leading-4 text-foreground/92">{entryPreview(entry, c)}</p>
-              {(attachmentsCount > 0 || isEditing) && (
-                <div className="mt-0.5 flex items-center gap-1.5 text-[0.64rem] text-muted-foreground/75">
-                  {attachmentsCount > 0 && <span>{c.attachments(attachmentsCount)}</span>}
-                  {isEditing && (
-                    <span className="text-[color-mix(in_srgb,var(--dt-composer-ring)_78%,var(--muted-foreground))]">
-                      {c.editingInComposer}
-                    </span>
-                  )}
-                </div>
-              )}
-            </div>
-          </StatusRow>
-        )
-      })}
+                </>
+              }
+              trailingVisible={isEditing}
+            >
+              <div className="min-w-0 flex-1">
+                <p className="truncate text-[0.73rem] leading-4 text-foreground/92">{entryPreview(entry, c)}</p>
+                {(attachmentsCount > 0 || isEditing) && (
+                  <div className="mt-0.5 flex items-center gap-1.5 text-[0.64rem] text-muted-foreground/75">
+                    {attachmentsCount > 0 && <span>{c.attachments(attachmentsCount)}</span>}
+                    {isEditing && (
+                      <span className="text-[color-mix(in_srgb,var(--dt-composer-ring)_78%,var(--muted-foreground))]">
+                        {c.editingInComposer}
+                      </span>
+                    )}
+                  </div>
+                )}
+              </div>
+            </StatusRow>
+          )
+        })}
+      </div>
     </StatusSection>
   )
 }

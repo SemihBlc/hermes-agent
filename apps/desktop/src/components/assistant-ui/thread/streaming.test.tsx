@@ -48,6 +48,10 @@ vi.stubGlobal('requestAnimationFrame', (callback: FrameRequestCallback) =>
   window.setTimeout(() => callback(performance.now()), 0)
 )
 vi.stubGlobal('cancelAnimationFrame', (id: number) => window.clearTimeout(id))
+// Electron provides CSS.escape; jsdom does not. Timeline fixture ids in this
+// suite are generated safe identifiers, so an identity stub keeps the renderer
+// test focused on chronology/streaming rather than browser API availability.
+vi.stubGlobal('CSS', { escape: (value: string) => value })
 
 Element.prototype.scrollTo = function scrollTo() {}
 
@@ -488,11 +492,18 @@ describe('assistant-ui streaming renderer', () => {
     expect(container.textContent).not.toContain('```ts')
   })
 
+  it('keeps completed provider reasoning visible by default', () => {
+    const { container } = render(<ReasoningHarness />)
+    const thinkingToggle = within(container).getByRole('button', { name: /thinking/i })
+
+    expect(thinkingToggle.getAttribute('aria-expanded')).toBe('true')
+    expect(container.querySelector('[data-slot="aui_reasoning-text"]')?.textContent).toBe(
+      'The user is asking what this file is.'
+    )
+  })
+
   it('renders reasoning text without a leading token space', () => {
     const { container } = render(<ReasoningHarness />)
-    const ui = within(container)
-
-    fireEvent.click(ui.getByRole('button', { name: /thinking/i }))
 
     expect(container.querySelector('[data-slot="aui_reasoning-text"]')?.textContent).toBe(
       'The user is asking what this file is.'
@@ -505,15 +516,13 @@ describe('assistant-ui streaming renderer', () => {
     const disclosures = container.querySelectorAll('[data-slot="aui_thinking-disclosure"]')
     expect(disclosures.length).toBe(1)
 
-    fireEvent.click(disclosures[0].querySelector('button')!)
-
     const reasoningParts = container.querySelectorAll('[data-slot="aui_reasoning-text"]')
     expect(reasoningParts.length).toBe(2)
     expect(reasoningParts[0]?.textContent).toBe('First thought.')
     expect(reasoningParts[1]?.textContent).toBe('Second thought.')
   })
 
-  it('does not reopen an earlier completed thinking group when a later group is running', () => {
+  it('keeps only the current thinking group open until the running message completes', () => {
     const { container } = render(<RunningMessageHarness message={assistantSeparatedReasoningMessage()} />)
 
     const disclosures = container.querySelectorAll('[data-slot="aui_thinking-disclosure"]')

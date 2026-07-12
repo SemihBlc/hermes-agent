@@ -1859,11 +1859,12 @@ class AIAgent:
                 content = msg.get("content")
                 _row_timestamp = msg.get("timestamp")
                 # Apply the persist override to THIS row's written values only
-                # (never to the live dict). Match the original guard: text-only
-                # content is replaced; multimodal (list) content is left intact
-                # so image/audio blocks aren't clobbered by the text override.
+                # (never to the live dict). The override is the caller's explicit
+                # durable/transcript representation, so it must also replace
+                # multimodal list content; otherwise model-only image prompts,
+                # local paths, and synthesized placeholders leak into the DB.
                 if _ov_idx == _msg_idx and msg.get("role") == "user":
-                    if _ov_content is not None and not isinstance(content, list):
+                    if _ov_content is not None:
                         content = _ov_content
                     if _ov_timestamp is not None:
                         _row_timestamp = _ov_timestamp

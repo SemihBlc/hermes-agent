@@ -47,17 +47,17 @@ const ThinkingDisclosure: FC<{
   timerKey?: string
 }> = ({ children, messageRunning = false, pending = false, timerKey }) => {
   const { t } = useI18n()
-  // `null` = no explicit user toggle yet, defer to the streaming default.
-  // The default is "auto-open while streaming, auto-collapse when done" so
-  // reasoning surfaces a live preview without manual interaction. The first
-  // explicit toggle wins from then on.
+  // `null` = no explicit user toggle yet. Keep the current live phase open;
+  // once the message completes, keep every genuine provider-reasoning group
+  // open so the transcript shows more than headings. The first explicit user
+  // toggle wins from then on.
   const [userOpen, setUserOpen] = useState<boolean | null>(null)
   const elapsed = useElapsedSeconds(pending, timerKey)
   const scrollRef = useRef<HTMLDivElement | null>(null)
   const contentRef = useRef<HTMLDivElement | null>(null)
   const enterRef = useEnterAnimation(messageRunning, timerKey)
 
-  const open = userOpen ?? pending
+  const open = userOpen ?? (pending || !messageRunning)
   const isPreview = pending && userOpen === null
 
   // While the preview is live, pin the scroll container to the bottom on

@@ -7226,6 +7226,42 @@ class TestPersistUserMessageOverride:
         assert first_db_write["content"] == "[Image attachment]"
         assert "PRIVATE MODEL-ONLY" not in first_db_write["content"]
 
+    def test_native_multimodal_image_persists_only_neutral_attachment_marker(self, agent):
+        agent._session_db = MagicMock()
+        agent.session_id = "native-image-session"
+        agent._last_flushed_db_idx = 0
+        agent._persist_user_message_idx = 0
+        agent._persist_user_message_override = "[Image attachment]"
+        multimodal_content = [
+            {
+                "type": "text",
+                "text": (
+                    "What do you see in this image?\n\n"
+                    "[Image attached at: /private/tmp/private-shot.png]"
+                ),
+            },
+            {
+                "type": "image_url",
+                "image_url": {"url": "data:image/png;base64,PRIVATEIMAGEBYTES"},
+            },
+        ]
+        messages = [
+            {"role": "user", "content": multimodal_content},
+            {"role": "assistant", "content": "I inspected the image."},
+        ]
+
+        agent._persist_session(messages, [])
+
+        # Keep the full multimodal content available to the live model call.
+        assert messages[0]["content"] == multimodal_content
+        # Persist only the user-visible marker — never model-only fallback text,
+        # local paths, image bytes, or a synthesized screenshot placeholder.
+        first_db_write = agent._session_db.append_message.call_args_list[0].kwargs
+        assert first_db_write["content"] == "[Image attachment]"
+        assert "/private/tmp/private-shot.png" not in first_db_write["content"]
+        assert "PRIVATEIMAGEBYTES" not in first_db_write["content"]
+        assert "[screenshot]" not in first_db_write["content"]
+
 
 class TestReasoningReplayForStrictProviders:
     """Assistant replay must preserve provider-native reasoning fields."""
