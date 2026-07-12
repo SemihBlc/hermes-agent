@@ -19,7 +19,7 @@ interface StatusSectionProps {
  * (queue, subagents, background) reads as one piece. The stack supplies the
  * outer card and the dividers between groups; this owns only its own collapse.
  */
-export function StatusSection({ accessory, children, defaultCollapsed = true, icon, label }: StatusSectionProps) {
+export function StatusSection({ accessory, children, defaultCollapsed = false, icon, label }: StatusSectionProps) {
   const [collapsed, setCollapsed] = useState(defaultCollapsed)
 
   return (

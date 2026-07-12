@@ -140,7 +140,6 @@ export function ComposerStatusStack({ queue, sessionId }: ComposerStatusStackPro
               </Button>
             ) : undefined
           }
-          defaultCollapsed={group.type !== 'todo'}
           icon={<Codicon className="text-muted-foreground/70" name={GROUP_ICON[group.type]} size="0.8rem" />}
           label={groupLabel(group, t.statusStack)}
         >
