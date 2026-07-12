@@ -133,6 +133,19 @@ function readFileDisplayTarget(
   return [fileEditBasename(path), lineLabel].filter(Boolean).join(' ')
 }
 
+function skillViewDisplayTarget(args: Record<string, unknown>): string {
+  const name = firstStringField(args, ['name', 'skill', 'skill_name'])
+
+  if (!name) {
+    return ''
+  }
+
+  const filePath = firstStringField(args, ['file_path', 'path'])
+  const target = filePath ? `${name} / ${filePath}` : name
+
+  return compactPreview(target, 80)
+}
+
 const TOOL_META: Record<ToolTitleKey, ToolMetaSpec> = {
   browser_click: {
     icon: 'globe',
@@ -598,6 +611,19 @@ export function stripLeadingAction(value: string, actions: readonly string[]): s
   }
 
   return value
+}
+
+function inheritedActionTarget(value: string, rawTarget: string, actions: readonly string[]): string {
+  const stripped = stripLeadingAction(value, actions)
+
+  if (!stripped) {
+    return rawTarget
+  }
+
+  const inherited = normalize(value)
+  const raw = normalize(rawTarget)
+
+  return raw && (raw === inherited || raw.startsWith(`${inherited} `)) ? value : stripped
 }
 
 function collectResultItems(value: unknown): unknown[] {
@@ -1323,14 +1349,22 @@ function dynamicTitle(
       : fallback
   }
 
+  if (part.toolName === 'skill_view') {
+    const target = skillViewDisplayTarget(args)
+
+    if (target) {
+      const action = part.result === undefined ? 'Loading skill' : 'Skill'
+
+      return titledAction(action, `${action}: ${target}`)
+    }
+  }
+
   if (part.toolName === 'read_file') {
     const readingAction = translateNow('assistant.tool.actions.reading')
     const readAction = translateNow('assistant.tool.actions.read')
     const inheritedTarget = firstStringField(args, ['context', 'preview'])
-
-    const target =
-      stripLeadingAction(inheritedTarget, [readingAction, readAction, 'Reading', 'Read']) ||
-      readFileDisplayTarget(args, result, false)
+    const rawTarget = readFileDisplayTarget(args, result, false)
+    const target = inheritedActionTarget(inheritedTarget, rawTarget, [readingAction, readAction, 'Reading', 'Read'])
 
     const action = verb(readingAction, readAction)
 
@@ -1351,15 +1385,17 @@ function dynamicTitle(
         : translateNow('assistant.tool.actions.ran')
 
     const inheritedCommand = firstStringField(args, ['context', 'preview'])
+    const rawCommand = firstStringField(args, ['command', 'code'])
 
     const command =
-      stripLeadingAction(
+      inheritedActionTarget(
         inheritedCommand,
+        rawCommand,
         part.toolName === 'execute_code'
           ? [runningAction, ranAction, 'Running code', 'Ran code']
           : [runningAction, ranAction, 'Running', 'Ran']
       ) ||
-      firstStringField(args, ['command', 'code']) ||
+      rawCommand ||
       contextValue(args)
 
     if (command) {
