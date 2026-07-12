@@ -12,13 +12,7 @@
 import { createRequire } from 'node:module'
 import { fileURLToPath } from 'node:url'
 import { dirname, resolve, join } from 'node:path'
-import {
-  cpSync,
-  existsSync,
-  mkdirSync,
-  readdirSync,
-  rmSync
-} from 'node:fs'
+import { chmodSync, cpSync, existsSync, mkdirSync, readdirSync, rmSync } from 'node:fs'
 import { isMain } from './utils.mjs'
 
 const here = dirname(fileURLToPath(import.meta.url))
@@ -44,11 +38,16 @@ function copyGlobByExt(srcDir, destDir, extensions) {
       copyGlobByExt(join(srcDir, entry.name), join(destDir, entry.name), extensions)
       continue
     }
-    if (extensions.some((ext) => entry.name.endsWith(ext))) {
+    if (extensions.some(ext => entry.name.endsWith(ext))) {
       mkdirSync(destDir, { recursive: true })
       cpSync(join(srcDir, entry.name), join(destDir, entry.name))
     }
   }
+}
+
+export function copySpawnHelper(src, dest, platform = process.platform) {
+  cpSync(src, dest)
+  if (platform !== 'win32') chmodSync(dest, 0o755)
 }
 
 /**
@@ -63,7 +62,7 @@ function copyGlobByExt(srcDir, destDir, extensions) {
  * Directories are copied wholesale to also cover any nested native
  * payload (e.g. a conpty/ subfolder some build layouts produce).
  */
-function copyBuildRelease(srcDir, destDir) {
+function copyBuildRelease(srcDir, destDir, platform) {
   if (!existsSync(srcDir)) return
   mkdirSync(destDir, { recursive: true })
   for (const entry of readdirSync(srcDir, { withFileTypes: true })) {
@@ -71,7 +70,11 @@ function copyBuildRelease(srcDir, destDir) {
       cpSync(join(srcDir, entry.name), join(destDir, entry.name), { recursive: true })
       continue
     }
-    if (entry.name === 'spawn-helper' || /\.(node|dll|exe)$/.test(entry.name)) {
+    if (entry.name === 'spawn-helper') {
+      copySpawnHelper(join(srcDir, entry.name), join(destDir, entry.name), platform)
+      continue
+    }
+    if (/\.(node|dll|exe)$/.test(entry.name)) {
       cpSync(join(srcDir, entry.name), join(destDir, entry.name))
     }
   }
@@ -94,7 +97,7 @@ export function stageNodePty({ platform = process.platform, arch = process.arch 
   // build/Release/* — present when node-pty was compiled locally
   // (e.g. no prebuild available for this Electron ABI/platform combo).
   // Some installs won't have this at all if prebuild-install succeeded.
-  copyBuildRelease(join(srcRoot, 'build/Release'), join(destRoot, 'build/Release'))
+  copyBuildRelease(join(srcRoot, 'build/Release'), join(destRoot, 'build/Release'), platform)
 
   // prebuilds/<platform>-<arch>/* — the prebuild-install payload for the
   // *target* we're packaging, not necessarily the host running this script.
@@ -114,7 +117,7 @@ export function stageNodePty({ platform = process.platform, arch = process.arch 
         continue
       }
       if (entry.name === 'spawn-helper') {
-        cpSync(join(prebuildDir, entry.name), join(destPrebuild, entry.name))
+        copySpawnHelper(join(prebuildDir, entry.name), join(destPrebuild, entry.name), platform)
       }
     }
   } else {
