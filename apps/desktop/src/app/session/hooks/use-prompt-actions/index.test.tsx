@@ -356,6 +356,49 @@ describe('usePromptActions slash.exec dispatch payloads', () => {
   })
 })
 
+describe('usePromptActions image-only submits', () => {
+  afterEach(() => {
+    cleanup()
+    $busy.set(false)
+    vi.restoreAllMocks()
+  })
+
+  it('keeps synthetic instructions and local paths out of persisted user text', async () => {
+    const calls: { method: string; params?: Record<string, unknown> }[] = []
+
+    const requestGateway = vi.fn(async (method: string, params?: Record<string, unknown>) => {
+      calls.push({ method, params })
+
+      if (method === 'image.attach') {
+        return { attached: true, path: '.hermes/desktop-attachments/screenshot.png' } as never
+      }
+
+      return {} as never
+    })
+
+    const image: ComposerAttachment = {
+      id: 'image-1',
+      kind: 'image',
+      label: 'screenshot.png',
+      path: '/Users/alice/Desktop/screenshot.png',
+      previewUrl: 'data:image/png;base64,AAAA',
+      refText: '@image:/Users/alice/Desktop/screenshot.png'
+    }
+
+    let handle: HarnessHandle | null = null
+    render(
+      <Harness onReady={h => (handle = h)} refreshSessions={async () => undefined} requestGateway={requestGateway} />
+    )
+
+    await handle!.submitText('', { attachments: [image] })
+
+    expect(calls).toContainEqual({
+      method: 'prompt.submit',
+      params: { session_id: RUNTIME_SESSION_ID, text: '' }
+    })
+  })
+})
+
 describe('usePromptActions desktop slash pickers', () => {
   beforeEach(() => {
     setSessions(() => [sessionInfo({ id: '20260610_120000_abcdef', title: 'Loaded session' })])
@@ -852,6 +895,33 @@ describe('usePromptActions file attachment sync', () => {
       refText: '@file:`/Users/alice/Downloads/report.txt`'
     }
   }
+
+  it('clears a local image ref after native attachment staging', async () => {
+    const requestGateway = vi.fn(
+      async () =>
+        ({
+          attached: true,
+          path: '.hermes/desktop-attachments/screenshot.png'
+        }) as never
+    )
+
+    const result = await uploadComposerAttachment(
+      {
+        id: 'image:screenshot.png',
+        kind: 'image',
+        label: 'screenshot.png',
+        path: '/Users/alice/Desktop/screenshot.png',
+        refText: '@image:/Users/alice/Desktop/screenshot.png'
+      },
+      { remote: false, requestGateway, sessionId: RUNTIME_SESSION_ID }
+    )
+
+    expect(result.refText).toBeUndefined()
+    expect(requestGateway).toHaveBeenCalledWith('image.attach', {
+      path: '/Users/alice/Desktop/screenshot.png',
+      session_id: RUNTIME_SESSION_ID
+    })
+  })
 
   it('uploads file bytes via file.attach on a remote gateway and submits the rewritten ref', async () => {
     // Remote gateway can't read the client-disk path, so the desktop must upload
@@ -1390,6 +1460,7 @@ describe('usePromptActions submit session-context isolation (#54527)', () => {
   it('aborts recovery submit when the user switches sessions during timeout resume', async () => {
     const calls: { method: string; params?: Record<string, unknown> }[] = []
     let submitAttempts = 0
+
     let releaseResume: () => void = () => {}
 
     const selectedStoredSessionIdRef: MutableRefObject<string | null> = { current: STORED_SESSION_A }

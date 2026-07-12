@@ -114,6 +114,7 @@ export async function uploadComposerAttachment(
       attachedSessionId: sessionId,
       label: attachedPath ? pathLabel(attachedPath) : attachment.label,
       path: attachedPath,
+      refText: undefined,
       uploadState: undefined
     }
   }
