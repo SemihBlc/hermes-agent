@@ -126,6 +126,26 @@ class TestDetectDangerousRm:
                     None,
                 )
 
+    def test_macos_tmp_alias_is_allowed_for_verification_cleanup(self):
+        realpath = os.path.realpath
+
+        def macos_realpath(path):
+            if path == "/tmp":
+                return "/private/tmp"
+            if path.startswith("/tmp/"):
+                return f"/private{path}"
+            return realpath(path)
+
+        with (
+            mock_patch("tempfile.gettempdir", return_value="/tmp"),
+            mock_patch("tools.approval.os.path.realpath", side_effect=macos_realpath),
+        ):
+            assert detect_dangerous_command("rm -f /tmp/hermes-verify-example.py") == (
+                False,
+                None,
+                None,
+            )
+
     def test_symlinked_temp_dir_only_exempts_canonical_target(self, tmp_path):
         real_temp = tmp_path / "real-temp"
         real_temp.mkdir()
